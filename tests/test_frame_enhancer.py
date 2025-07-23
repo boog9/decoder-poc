@@ -32,7 +32,6 @@ def test_parse_args_defaults() -> None:
     assert isinstance(args, argparse.Namespace)
     assert args.batch_size == 4
 
-
 def test_load_model_uses_correct_name(monkeypatch):
     recorded = {}
 
@@ -53,4 +52,3 @@ def test_load_model_uses_correct_name(monkeypatch):
     importlib.reload(fe)
     fe._load_model('cpu')
     assert recorded['name'] == 'swin2sr-lightweight-x4-128'
-

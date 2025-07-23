@@ -25,6 +25,7 @@ except ImportError as exc:  # pragma: no cover - dependency missing
     raise ImportError(
         "Pillow is required. Install with 'pip install pillow'"
     ) from exc
+    
 from tqdm import tqdm
 
 LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def _load_model(device: str):
     import torch
 
     model = timm.create_model("swin2sr-lightweight-x4-128", pretrained=True)
+
     model = model.eval().to(device)
     return model
 
