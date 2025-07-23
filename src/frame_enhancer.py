@@ -60,7 +60,7 @@ def _load_model(device: str):
     import timm
     import torch
 
-    model = timm.create_model("swin2sr-lightweight-x4-128", pretrained=True)
+    model = timm.create_model("swin2sr-lightweight-x4-64", pretrained=True)
 
     model = model.eval().to(device)
     return model
