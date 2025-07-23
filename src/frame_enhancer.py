@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover - optional dependency
     hf_hub_download = None
 
 DEFAULT_MODEL_ID = "hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
+
 SCALE = 4
 
 LOGGER = logging.getLogger(__name__)
@@ -152,7 +153,6 @@ def enhance_frames(
     output_dir.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _load_model(device, model_id)
-
     total_start = time.perf_counter()
     processed = 0
     with tqdm(total=len(images), unit="img", desc="Enhancing") as pbar:
@@ -184,6 +184,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     try:
         enhance_frames(args.input_dir, args.output_dir, args.batch_size, args.model_id)
+
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Failed to enhance frames: %s", exc)
         raise SystemExit(1) from exc
