@@ -1,14 +1,18 @@
 # decoder-poc
 
-This repository contains experimental utilities for video processing. The first
-module provides a command-line interface for extracting frames from a video
-using FFmpeg.
+This project contains experimental utilities for video processing. The `frame_extractor` CLI provides a simple way to extract video frames using FFmpeg.
 
-## Frame Extractor
+## Frame Extraction CLI
 
 ```
-python -m src.frame_extractor --input input.mp4 --output frames --fps 30
+python src/frame_extractor.py -i <video.mp4> -o /path/to/output -f 30
 ```
 
-The script logs extraction progress and writes frames as JPEG images in the
-specified directory.
+- `-i`, `--input`: Path to input video.
+- `-o`, `--output`: Output directory for JPEG frames.
+- `-f`, `--fps`: Frames per second to extract (default: 30).
+- `-v`, `--verbose`: Increase logging detail.
+
+
+The script requires FFmpeg to be installed and available on the system path.
+
