@@ -18,13 +18,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Iterable
-
-try:
-    from PIL import Image
-except ImportError as exc:  # pragma: no cover - dependency missing
-    raise ImportError(
-        "Pillow is required. Install with 'pip install pillow'"
-    ) from exc
+from PIL import Image
 from tqdm import tqdm
 
 LOGGER = logging.getLogger(__name__)
@@ -108,6 +102,7 @@ def enhance_frames(input_dir: Path, output_dir: Path, batch_size: int = 4) -> No
             batch_paths = images[i : i + batch_size]
             batch = [_load_image(p) for p in batch_paths]
             batch_tensor = torch.stack(batch).to(device)
+
             start = time.perf_counter()
             with torch.no_grad():
                 out = model(batch_tensor)
