@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.modules.setdefault("PIL", types.ModuleType("PIL")).Image = object()
 sys.modules.setdefault("tqdm", types.ModuleType("tqdm")).tqdm = lambda *a, **k: a[0] if a else None
 
+import importlib
 import src.frame_enhancer as fe
 
 
@@ -31,3 +32,23 @@ def test_parse_args_defaults() -> None:
     assert isinstance(args, argparse.Namespace)
     assert args.batch_size == 4
 
+def test_load_model_uses_correct_name(monkeypatch):
+    recorded = {}
+
+    def fake_create_model(name, pretrained=True):
+        recorded['name'] = name
+
+        class Dummy:
+            def eval(self):
+                return self
+
+            def to(self, device):
+                return self
+
+        return Dummy()
+
+    monkeypatch.setitem(sys.modules, 'timm', types.SimpleNamespace(create_model=fake_create_model))
+    monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
+    importlib.reload(fe)
+    fe._load_model('cpu')
+    assert recorded['name'] == 'swin2sr-lightweight-x4-128'

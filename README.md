@@ -35,6 +35,7 @@ Build the Docker image (requires NVIDIA GPU drivers):
 ```bash
 make build
 ```
+
 ## Frame Enhancement CLI
 
 Enhance extracted frames using the Swin2SR model. Requires a CUDA-enabled GPU.
