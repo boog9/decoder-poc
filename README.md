@@ -23,10 +23,10 @@ The script requires FFmpeg to be installed and available on the system path.
 
 ## Setup
 
-Install Python dependencies and run tests:
+Install the required Python packages and run tests:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -U -r requirements.txt
 make test
 ```
 
@@ -50,10 +50,11 @@ python -m src.frame_enhancer \
     --model-id caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr
 ```
 
-Before running the enhancement script, install the Python dependencies:
+Before running the enhancement script, install the Python dependencies. Ensure
+that ``python`` and ``pip`` come from the same environment:
 
 ```
-pip install -r requirements.txt
+python -m pip install -U -r requirements.txt
 ```
 
 Alternatively, build the Docker image which installs everything via `make build`.

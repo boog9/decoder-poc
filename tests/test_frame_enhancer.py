@@ -73,4 +73,46 @@ def test_load_model_uses_transformers(monkeypatch):
     assert processor == 'processor'
 
 
+def test_load_model_aliases_swin2sr(monkeypatch):
+    recorded = {}
+
+    def fake_model_pretrained(model_id):
+        recorded['model_id'] = model_id
+
+        class Dummy:
+            def eval(self):
+                return self
+
+            def to(self, device):
+                recorded['device'] = device
+                return self
+
+        return Dummy()
+
+    def fake_processor_pretrained(model_id):
+        recorded['processor_id'] = model_id
+        return 'processor'
+
+    tf_mod = types.ModuleType('transformers')
+    tf_mod.Swin2SRForImageSuperResolution = types.SimpleNamespace(
+        from_pretrained=fake_model_pretrained
+    )
+    tf_mod.AutoImageProcessor = types.SimpleNamespace(
+        from_pretrained=fake_processor_pretrained
+    )
+
+    monkeypatch.setitem(sys.modules, 'transformers', tf_mod)
+    monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
+
+    import importlib
+    importlib.reload(fe)
+
+    model, processor = fe._load_model('cpu', 'repo/model')
+
+    assert recorded['model_id'] == 'repo/model'
+    assert recorded['processor_id'] == 'repo/model'
+    assert recorded['device'] == 'cpu'
+    assert processor == 'processor'
+
+
 # legacy tests removed since model loading now uses Hugging Face Transformers
