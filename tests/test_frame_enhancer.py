@@ -31,6 +31,7 @@ def test_parse_args_defaults() -> None:
     args = fe.parse_args(["--input-dir", "in", "--output-dir", "out"])
     assert isinstance(args, argparse.Namespace)
     assert args.batch_size == 4
+    assert args.model_id == fe.DEFAULT_MODEL_ID
 
 def test_load_model_uses_correct_name(monkeypatch, tmp_path):
     recorded = {}
@@ -59,7 +60,7 @@ def test_load_model_uses_correct_name(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, 'huggingface_hub', types.SimpleNamespace(hf_hub_download=fake_hf_download))
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
     importlib.reload(fe)
-    fe._load_model('cpu')
+    fe._load_model(fe.DEFAULT_MODEL_ID, 'cpu')
     assert recorded['name'] == 'swin'
     assert recorded['scale'] == 4
 
@@ -93,7 +94,7 @@ def test_load_model_with_missing_architecture(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
 
     importlib.reload(fe)
-    fe._load_model('cpu')
+    fe._load_model(fe.DEFAULT_MODEL_ID, 'cpu')
 
     assert recorded['name'] == 'dummy_arch'
     assert recorded['scale'] == 4
@@ -129,7 +130,7 @@ def test_load_model_with_architectures_list(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
 
     importlib.reload(fe)
-    fe._load_model('cpu')
+    fe._load_model(fe.DEFAULT_MODEL_ID, 'cpu')
 
     assert recorded['name'] == 'list_arch'
     assert recorded['scale'] == 4
