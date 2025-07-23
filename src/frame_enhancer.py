@@ -33,7 +33,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     hf_hub_download = None
 
-MODEL_NAME = "hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
+DEFAULT_MODEL_ID = "hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
 SCALE = 4
 
 LOGGER = logging.getLogger(__name__)
@@ -60,22 +60,40 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=4,
         help="Number of frames to process per batch (default: 4)",
     )
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        default=DEFAULT_MODEL_ID,
+        help=(
+            "Hugging Face repo ID or local path to the Swin2SR model "
+            f"(default: {DEFAULT_MODEL_ID})"
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def _load_model(device: str):
-    """Load Swin2SR model on given device."""
+def _load_model(device: str, model_id: str):
+    """Load Swin2SR model on given device.
+
+    Args:
+        device: ``cuda`` or ``cpu``.
+        model_id: Hugging Face repo ID or path to a local model directory.
+    """
     import json
     import timm
     import torch
 
-    if hf_hub_download is None:
-        raise ImportError(
-            "huggingface-hub is required. Install with 'pip install huggingface-hub'"
-        )
-
-    repo = MODEL_NAME.split(":", 1)[1]
-    cfg_path = hf_hub_download(repo, "config.json")
+    if model_id.startswith("hf-hub:"):
+        if hf_hub_download is None:
+            raise ImportError(
+                "huggingface-hub is required. Install with 'pip install huggingface-hub'"
+            )
+        repo = model_id.split(":", 1)[1]
+        cfg_path = hf_hub_download(repo, "config.json")
+    else:
+        cfg_path = Path(model_id) / "config.json"
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"config.json not found in {model_id}")
     with open(cfg_path, "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
 
@@ -118,7 +136,9 @@ def _save_image(tensor, path: Path) -> None:
     img.save(path)
 
 
-def enhance_frames(input_dir: Path, output_dir: Path, batch_size: int = 4) -> None:
+def enhance_frames(
+    input_dir: Path, output_dir: Path, batch_size: int = 4, model_id: str = DEFAULT_MODEL_ID
+) -> None:
     """Enhance frames in ``input_dir`` and save to ``output_dir``."""
     import torch
 
@@ -131,7 +151,7 @@ def enhance_frames(input_dir: Path, output_dir: Path, batch_size: int = 4) -> No
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = _load_model(device)
+    model = _load_model(device, model_id)
 
     total_start = time.perf_counter()
     processed = 0
@@ -163,7 +183,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     try:
-        enhance_frames(args.input_dir, args.output_dir, args.batch_size)
+        enhance_frames(args.input_dir, args.output_dir, args.batch_size, args.model_id)
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Failed to enhance frames: %s", exc)
         raise SystemExit(1) from exc
