@@ -35,8 +35,9 @@ def test_parse_args_defaults() -> None:
 def test_load_model_uses_correct_name(monkeypatch):
     recorded = {}
 
-    def fake_create_model(name, pretrained=True):
+    def fake_create_model(name, pretrained=True, scale=None):
         recorded['name'] = name
+        recorded['scale'] = scale
 
         class Dummy:
             def eval(self):
@@ -51,4 +52,5 @@ def test_load_model_uses_correct_name(monkeypatch):
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
     importlib.reload(fe)
     fe._load_model('cpu')
-    assert recorded['name'] == 'swin2sr-lightweight-x4-64'
+    assert recorded['name'] == 'caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr'
+    assert recorded['scale'] == 4
