@@ -29,3 +29,13 @@ Enhance extracted frames using the Swin2SR model. Requires a CUDA-enabled GPU.
 python -m src.frame_enhancer --input-dir frames/ --output-dir frames_sr/ --batch-size 4
 ```
 
+Before running the enhancement script, install the Python dependencies:
+
+```
+pip install -r requirements.txt
+```
+
+Alternatively, build the Docker image which installs everything via `make build`.
+The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
+``requirements.txt``.
+
