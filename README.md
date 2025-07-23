@@ -50,6 +50,14 @@ python -m src.frame_enhancer \
     --model-id caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr
 ```
 
+If you encounter CUDA out-of-memory errors, reduce `--batch-size` or set the
+environment variable:
+
+```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+```
+
+
 Before running the enhancement script, install the Python dependencies. Ensure
 that ``python`` and ``pip`` come from the same environment:
 

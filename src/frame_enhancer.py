@@ -139,8 +139,16 @@ def enhance_frames(
             batch = [_load_image(p) for p in batch_paths]
             inputs = processor(images=batch, return_tensors="pt").to(device)
             start = time.perf_counter()
-            with torch.no_grad():
-                out = model(**inputs).reconstruction
+            try:
+                with torch.no_grad():
+                    out = model(**inputs).reconstruction
+            except RuntimeError as exc:
+                if "out of memory" in str(exc).lower():
+                    LOGGER.error(
+                        "CUDA out of memory. Try reducing --batch-size or set"
+                        " PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+                    )
+                raise
             elapsed = time.perf_counter() - start
             per_image = elapsed / len(batch_paths)
             for tensor, src in zip(out, batch_paths):
@@ -148,6 +156,8 @@ def enhance_frames(
             processed += len(batch_paths)
             pbar.update(len(batch_paths))
             pbar.set_postfix({"ms/img": f"{per_image*1000:.2f}"})
+            if device == "cuda":
+                torch.cuda.empty_cache()
     total_elapsed = time.perf_counter() - total_start
     fps = processed / total_elapsed if total_elapsed > 0 else 0
     print(
