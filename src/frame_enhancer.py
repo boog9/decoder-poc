@@ -18,7 +18,6 @@ import logging
 import time
 from pathlib import Path
 from typing import Iterable
-
 from PIL import Image
 from tqdm import tqdm
 
@@ -55,12 +54,12 @@ def _load_model(device: str):
     import torch
 
     model = timm.create_model("swin2sr_lightweight_x4_128", pretrained=True)
-    model = model.eval().to(device).half()
+    model = model.eval().to(device)
     return model
 
 
 def _load_image(path: Path):
-    """Load an image as a half-precision tensor."""
+    """Load an image tensor."""
     import torch
     import numpy as np
 
@@ -102,7 +101,8 @@ def enhance_frames(input_dir: Path, output_dir: Path, batch_size: int = 4) -> No
         for i in range(0, len(images), batch_size):
             batch_paths = images[i : i + batch_size]
             batch = [_load_image(p) for p in batch_paths]
-            batch_tensor = torch.stack(batch).to(device).half()
+            batch_tensor = torch.stack(batch).to(device)
+
             start = time.perf_counter()
             with torch.no_grad():
                 out = model(batch_tensor)

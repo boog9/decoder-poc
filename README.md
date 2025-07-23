@@ -21,6 +21,20 @@ Example output:
 
 The script requires FFmpeg to be installed and available on the system path.
 
+## Setup
+
+Install Python dependencies and run tests:
+
+```bash
+pip install -r requirements.txt
+make test
+```
+
+Build the Docker image (requires NVIDIA GPU drivers):
+
+```bash
+make build
+```
 ## Frame Enhancement CLI
 
 Enhance extracted frames using the Swin2SR model. Requires a CUDA-enabled GPU.
@@ -38,4 +52,3 @@ pip install -r requirements.txt
 Alternatively, build the Docker image which installs everything via `make build`.
 The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 ``requirements.txt``.
-
