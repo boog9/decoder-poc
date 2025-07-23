@@ -29,10 +29,17 @@ except ImportError as exc:  # pragma: no cover - dependency missing
 from tqdm import tqdm
 
 try:
-    from transformers import AutoImageProcessor, AutoModelForImageSuperResolution
+    from transformers import AutoImageProcessor
+    try:  # Newer Transformers versions
+        from transformers import AutoModelForImageSuperResolution
+    except ImportError:  # pragma: no cover - older Transformers
+        from transformers import (
+            Swin2SRForImageSuperResolution as AutoModelForImageSuperResolution,
+        )
 except ImportError as exc:  # pragma: no cover - optional dependency
     raise ImportError(
-        "transformers is required. Install with 'pip install transformers'"
+        "transformers with Swin2SR support is required.\n"
+        "Install or upgrade with 'pip install -U transformers'"
     ) from exc
 
 DEFAULT_MODEL_ID = "caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
