@@ -1,10 +1,10 @@
 .PHONY: test enhance build
 
 build:
-docker build -t decoder-poc .
+	docker build -t decoder-poc .
 
 test:
-pytest -vv
+	pytest -vv
 
 enhance:
-python -m src.frame_enhancer $(ARGS)
+	python -m src.frame_enhancer $(ARGS)

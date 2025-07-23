@@ -19,7 +19,12 @@ import time
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError as exc:  # pragma: no cover - dependency missing
+    raise ImportError(
+        "Pillow is required. Install with 'pip install pillow'"
+    ) from exc
 from tqdm import tqdm
 
 LOGGER = logging.getLogger(__name__)
