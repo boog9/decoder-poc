@@ -6,7 +6,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+# Install base Python dependencies including NumPy
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
+    && pip3 install --no-cache-dir 'numpy>=1.26'
 
 WORKDIR /app
 COPY . /app
