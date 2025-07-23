@@ -36,6 +36,12 @@ def test_parse_args_defaults() -> None:
     assert isinstance(args, argparse.Namespace)
     assert args.batch_size == 4
     assert args.model_id == fe.DEFAULT_MODEL_ID
+    assert args.fp16 is False
+
+
+def test_parse_args_fp16_flag() -> None:
+    args = fe.parse_args(["--input-dir", "in", "--output-dir", "out", "--fp16"])
+    assert args.fp16 is True
 
 def test_load_model_uses_transformers(monkeypatch):
     recorded = {}
@@ -49,6 +55,10 @@ def test_load_model_uses_transformers(monkeypatch):
 
             def to(self, device):
                 recorded['device'] = device
+                return self
+
+            def half(self):
+                recorded['half'] = True
                 return self
 
         return Dummy()
@@ -65,12 +75,13 @@ def test_load_model_uses_transformers(monkeypatch):
     monkeypatch.setattr(fe, 'AutoImageProcessor',
                          types.SimpleNamespace(from_pretrained=fake_processor_pretrained))
 
-    model, processor = fe._load_model('cpu', 'repo/model')
+    model, processor = fe._load_model('cpu', 'repo/model', fp16=True)
 
     assert recorded['model_id'] == 'repo/model'
     assert recorded['processor_id'] == 'repo/model'
     assert recorded['device'] == 'cpu'
     assert processor == 'processor'
+    assert recorded.get('half')
 
 
 def test_load_model_aliases_swin2sr(monkeypatch):
@@ -85,6 +96,10 @@ def test_load_model_aliases_swin2sr(monkeypatch):
 
             def to(self, device):
                 recorded['device'] = device
+                return self
+
+            def half(self):
+                recorded['half'] = True
                 return self
 
         return Dummy()
@@ -107,12 +122,13 @@ def test_load_model_aliases_swin2sr(monkeypatch):
     import importlib
     importlib.reload(fe)
 
-    model, processor = fe._load_model('cpu', 'repo/model')
+    model, processor = fe._load_model('cpu', 'repo/model', fp16=True)
 
     assert recorded['model_id'] == 'repo/model'
     assert recorded['processor_id'] == 'repo/model'
     assert recorded['device'] == 'cpu'
     assert processor == 'processor'
+    assert recorded.get('half')
 
 
 # legacy tests removed since model loading now uses Hugging Face Transformers

@@ -47,8 +47,12 @@ python -m src.frame_enhancer \
     --input-dir frames/ \
     --output-dir frames_sr/ \
     --batch-size 4 \
-    --model-id caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr
+   --model-id caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr \
+   --fp16
 ```
+
+The `--fp16` flag converts the model and inputs to half precision,
+reducing memory usage on supported GPUs.
 
 If you encounter CUDA out-of-memory errors, reduce `--batch-size` or set the
 environment variable:

@@ -77,15 +77,21 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
             f"(default: {DEFAULT_MODEL_ID})"
         ),
     )
+    parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Use FP16 precision for inference (requires CUDA).",
+    )
     return parser.parse_args(argv)
 
 
-def _load_model(device: str, model_id: str):
+def _load_model(device: str, model_id: str, fp16: bool = False):
     """Load Swin2SR model and processor on given device.
 
     Args:
         device: ``cuda`` or ``cpu``.
         model_id: Hugging Face repo ID or path to a local model directory.
+        fp16: Whether to convert the model to ``float16``.
 
     Returns:
         Tuple of model and processor.
@@ -95,6 +101,8 @@ def _load_model(device: str, model_id: str):
     model = AutoModelForImageSuperResolution.from_pretrained(model_id)
     processor = AutoImageProcessor.from_pretrained(model_id)
     model = model.eval().to(device)
+    if fp16:
+        model = model.half()
     return model, processor
 
 
@@ -116,9 +124,21 @@ def _save_image(tensor, path: Path) -> None:
 
 
 def enhance_frames(
-    input_dir: Path, output_dir: Path, batch_size: int = 4, model_id: str = DEFAULT_MODEL_ID
+    input_dir: Path,
+    output_dir: Path,
+    batch_size: int = 4,
+    model_id: str = DEFAULT_MODEL_ID,
+    fp16: bool = False,
 ) -> None:
-    """Enhance frames in ``input_dir`` and save to ``output_dir``."""
+    """Enhance frames in ``input_dir`` and save to ``output_dir``.
+
+    Args:
+        input_dir: Directory with input ``.png`` or ``.jpg`` frames.
+        output_dir: Directory where enhanced frames will be written.
+        batch_size: Number of frames to process per batch.
+        model_id: Hugging Face model identifier.
+        fp16: Whether to run the model using ``float16`` precision.
+    """
     import torch
 
     images = sorted(
@@ -130,14 +150,17 @@ def enhance_frames(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, processor = _load_model(device, model_id)
+    model, processor = _load_model(device, model_id, fp16)
     total_start = time.perf_counter()
     processed = 0
     with tqdm(total=len(images), unit="img", desc="Enhancing") as pbar:
         for i in range(0, len(images), batch_size):
             batch_paths = images[i : i + batch_size]
             batch = [_load_image(p) for p in batch_paths]
-            inputs = processor(images=batch, return_tensors="pt").to(device)
+            inputs = processor(images=batch, return_tensors="pt")
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            if fp16:
+                inputs = {k: v.half() if hasattr(v, "half") else v for k, v in inputs.items()}
             start = time.perf_counter()
             try:
                 with torch.no_grad():
@@ -171,7 +194,13 @@ def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     try:
-        enhance_frames(args.input_dir, args.output_dir, args.batch_size, args.model_id)
+        enhance_frames(
+            args.input_dir,
+            args.output_dir,
+            args.batch_size,
+            args.model_id,
+            args.fp16,
+        )
 
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Failed to enhance frames: %s", exc)
