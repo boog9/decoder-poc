@@ -32,13 +32,20 @@ def test_parse_args_defaults() -> None:
     assert isinstance(args, argparse.Namespace)
     assert args.batch_size == 4
 
-def test_load_model_uses_correct_name(monkeypatch):
+def test_load_model_uses_correct_name(monkeypatch, tmp_path):
     recorded = {}
 
-    def fake_create_model(name, pretrained=True, scale=None):
+    cfg = {"architecture": "swin"}
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"architecture": "swin"}')
+
+    def fake_hf_download(repo, filename):
+        return str(cfg_path)
+
+    def fake_create_model(name, pretrained=True, pretrained_cfg=None, scale=None):
         recorded['name'] = name
         recorded['scale'] = scale
-
+        
         class Dummy:
             def eval(self):
                 return self
@@ -49,8 +56,45 @@ def test_load_model_uses_correct_name(monkeypatch):
         return Dummy()
 
     monkeypatch.setitem(sys.modules, 'timm', types.SimpleNamespace(create_model=fake_create_model))
+    monkeypatch.setitem(sys.modules, 'huggingface_hub', types.SimpleNamespace(hf_hub_download=fake_hf_download))
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
     importlib.reload(fe)
     fe._load_model('cpu')
-    assert recorded['name'] == 'hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr'
+    assert recorded['name'] == 'swin'
     assert recorded['scale'] == 4
+
+
+def test_load_model_with_missing_architecture(monkeypatch, tmp_path):
+    recorded = {}
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"arch": "dummy_arch"}')
+
+    def fake_hf_download(repo, filename):
+        assert filename == "config.json"
+        return str(cfg_path)
+
+    def fake_create_model(name, pretrained=True, pretrained_cfg=None, scale=None):
+        recorded['name'] = name
+        recorded['scale'] = scale
+        recorded['cfg'] = pretrained_cfg
+
+        class Dummy:
+            def eval(self):
+                return self
+
+            def to(self, device):
+                return self
+
+        return Dummy()
+
+    monkeypatch.setitem(sys.modules, 'huggingface_hub', types.SimpleNamespace(hf_hub_download=fake_hf_download))
+    monkeypatch.setitem(sys.modules, 'timm', types.SimpleNamespace(create_model=fake_create_model))
+    monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
+
+    importlib.reload(fe)
+    fe._load_model('cpu')
+
+    assert recorded['name'] == 'dummy_arch'
+    assert recorded['scale'] == 4
+    assert recorded['cfg']['architecture'] == 'dummy_arch'
