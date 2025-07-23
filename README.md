@@ -39,7 +39,7 @@ make build
 ## Frame Enhancement CLI
 
 Enhance extracted frames using the Swin2SR model
-(`hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr`, scale=4).
+(`caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr`, scale=4).
 Requires a CUDA-enabled GPU.
 
 ```
@@ -47,7 +47,7 @@ python -m src.frame_enhancer \
     --input-dir frames/ \
     --output-dir frames_sr/ \
     --batch-size 4 \
-    --model-id hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr
+    --model-id caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr
 ```
 
 Before running the enhancement script, install the Python dependencies:

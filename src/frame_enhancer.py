@@ -29,13 +29,13 @@ except ImportError as exc:  # pragma: no cover - dependency missing
 from tqdm import tqdm
 
 try:
-    from huggingface_hub import hf_hub_download
-except ImportError:  # pragma: no cover - optional dependency
-    hf_hub_download = None
+    from transformers import AutoImageProcessor, AutoModelForImageSuperResolution
+except ImportError as exc:  # pragma: no cover - optional dependency
+    raise ImportError(
+        "transformers is required. Install with 'pip install transformers'"
+    ) from exc
 
-DEFAULT_MODEL_ID = "hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
-
-SCALE = 4
+DEFAULT_MODEL_ID = "caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
 
 LOGGER = logging.getLogger(__name__)
 
@@ -74,56 +74,27 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 
 def _load_model(device: str, model_id: str):
-    """Load Swin2SR model on given device.
+    """Load Swin2SR model and processor on given device.
 
     Args:
         device: ``cuda`` or ``cpu``.
         model_id: Hugging Face repo ID or path to a local model directory.
+
+    Returns:
+        Tuple of model and processor.
     """
-    import json
-    import timm
     import torch
 
-    if model_id.startswith("hf-hub:"):
-        if hf_hub_download is None:
-            raise ImportError(
-                "huggingface-hub is required. Install with 'pip install huggingface-hub'"
-            )
-        repo = model_id.split(":", 1)[1]
-        cfg_path = hf_hub_download(repo, "config.json")
-    else:
-        cfg_path = Path(model_id) / "config.json"
-        if not cfg_path.exists():
-            raise FileNotFoundError(f"config.json not found in {model_id}")
-    with open(cfg_path, "r", encoding="utf-8") as fh:
-        cfg = json.load(fh)
-
-    arch = (
-        cfg.get("architecture")
-        or cfg.get("architectures")
-        or cfg.get("arch")
-        or cfg.get("model")
-    )
-    if isinstance(arch, list):
-        arch = arch[0] if arch else None
-    if not arch:
-        raise KeyError("architecture")
-    cfg["architecture"] = arch
-
-    model = timm.create_model(arch, pretrained=True, pretrained_cfg=cfg, scale=SCALE)
+    model = AutoModelForImageSuperResolution.from_pretrained(model_id)
+    processor = AutoImageProcessor.from_pretrained(model_id)
     model = model.eval().to(device)
-    return model
+    return model, processor
 
 
 def _load_image(path: Path):
-    """Load an image tensor."""
-    import torch
-    import numpy as np
-
+    """Load an RGB image."""
     img = Image.open(path).convert("RGB")
-    arr = np.array(img).astype("float32") / 255.0
-    tensor = torch.from_numpy(arr).permute(2, 0, 1)
-    return tensor
+    return img
 
 
 def _save_image(tensor, path: Path) -> None:
@@ -152,17 +123,17 @@ def enhance_frames(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = _load_model(device, model_id)
+    model, processor = _load_model(device, model_id)
     total_start = time.perf_counter()
     processed = 0
     with tqdm(total=len(images), unit="img", desc="Enhancing") as pbar:
         for i in range(0, len(images), batch_size):
             batch_paths = images[i : i + batch_size]
             batch = [_load_image(p) for p in batch_paths]
-            batch_tensor = torch.stack(batch).to(device)
+            inputs = processor(images=batch, return_tensors="pt").to(device)
             start = time.perf_counter()
             with torch.no_grad():
-                out = model(batch_tensor)
+                out = model(**inputs).reconstruction
             elapsed = time.perf_counter() - start
             per_image = elapsed / len(batch_paths)
             for tensor, src in zip(out, batch_paths):

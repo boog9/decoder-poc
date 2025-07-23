@@ -1,6 +1,7 @@
 torch>=2.2.0
 torchvision>=0.17.2
-timm>=0.9.12
+transformers>=4.53
+accelerate>=0.27
+safetensors>=0.4
 pillow>=10.3.0
 numpy>=1.26
-huggingface-hub>=0.22.1
