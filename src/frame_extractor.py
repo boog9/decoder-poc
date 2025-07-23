@@ -9,6 +9,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """CLI script for extracting video frames using FFmpeg.
 
 Example:
@@ -21,6 +22,7 @@ import argparse
 import logging
 import os
 import subprocess
+import time
 import sys
 from typing import List
 
@@ -107,7 +109,7 @@ def main(argv: List[str] | None = None) -> None:
     """Entry point for the CLI."""
     args = parse_args(argv or sys.argv[1:])
     extract_frames(args.input, args.output, args.fps)
-=======
+    
 from pathlib import Path
 
 
@@ -140,8 +142,10 @@ def extract_frames(input_video: Path, output_dir: Path, fps: int) -> None:
         "pipe:1",
     ]
 
-    LOGGER.info("Running command: %s", " ".join(cmd))
+    LOGGER.debug("Running command: %s", " ".join(cmd))
 
+    frames_processed = 0
+    start = time.monotonic()
     with subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -153,12 +157,18 @@ def extract_frames(input_video: Path, output_dir: Path, fps: int) -> None:
         for line in proc.stdout:
             line = line.strip()
             if line.startswith("frame="):
-                LOGGER.info(line)
+                frames_processed = int(line.split("=", 1)[1])
+                LOGGER.debug(line)
             elif line.startswith("progress=") and line != "progress=continue":
-                LOGGER.info(line)
+                LOGGER.debug(line)
 
+    elapsed = time.monotonic() - start
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
+    LOGGER.info(
+        "Completed extraction of %d frames in %.2f seconds", frames_processed, elapsed
+    )
+
 
 
 def parse_args() -> argparse.Namespace:
