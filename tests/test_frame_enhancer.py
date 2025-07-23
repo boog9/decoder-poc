@@ -52,5 +52,5 @@ def test_load_model_uses_correct_name(monkeypatch):
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
     importlib.reload(fe)
     fe._load_model('cpu')
-    assert recorded['name'] == 'caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr'
+    assert recorded['name'] == 'hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr'
     assert recorded['scale'] == 4

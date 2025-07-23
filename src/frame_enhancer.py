@@ -28,7 +28,7 @@ except ImportError as exc:  # pragma: no cover - dependency missing
     
 from tqdm import tqdm
 
-MODEL_NAME = "caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
+MODEL_NAME = "hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
 SCALE = 4
 
 LOGGER = logging.getLogger(__name__)
