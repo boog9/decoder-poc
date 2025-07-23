@@ -51,4 +51,4 @@ def test_load_model_uses_correct_name(monkeypatch):
     monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
     importlib.reload(fe)
     fe._load_model('cpu')
-    assert recorded['name'] == 'swin2sr-lightweight-x4-128'
+    assert recorded['name'] == 'swin2sr-lightweight-x4-64'
