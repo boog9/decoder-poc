@@ -28,6 +28,11 @@ except ImportError as exc:  # pragma: no cover - dependency missing
     
 from tqdm import tqdm
 
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:  # pragma: no cover - optional dependency
+    hf_hub_download = None
+
 MODEL_NAME = "hf-hub:caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
 SCALE = 4
 
@@ -60,11 +65,26 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 def _load_model(device: str):
     """Load Swin2SR model on given device."""
+    import json
     import timm
     import torch
 
-    model = timm.create_model(MODEL_NAME, pretrained=True, scale=SCALE)
+    if hf_hub_download is None:
+        raise ImportError(
+            "huggingface-hub is required. Install with 'pip install huggingface-hub'"
+        )
 
+    repo = MODEL_NAME.split(":", 1)[1]
+    cfg_path = hf_hub_download(repo, "config.json")
+    with open(cfg_path, "r", encoding="utf-8") as fh:
+        cfg = json.load(fh)
+
+    arch = cfg.get("architecture") or cfg.get("arch") or cfg.get("model")
+    if not arch:
+        raise KeyError("architecture")
+    cfg["architecture"] = arch
+
+    model = timm.create_model(arch, pretrained=True, pretrained_cfg=cfg, scale=SCALE)
     model = model.eval().to(device)
     return model
 
