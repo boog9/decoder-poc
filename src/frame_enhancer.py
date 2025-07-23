@@ -79,7 +79,14 @@ def _load_model(device: str):
     with open(cfg_path, "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
 
-    arch = cfg.get("architecture") or cfg.get("arch") or cfg.get("model")
+    arch = (
+        cfg.get("architecture")
+        or cfg.get("architectures")
+        or cfg.get("arch")
+        or cfg.get("model")
+    )
+    if isinstance(arch, list):
+        arch = arch[0] if arch else None
     if not arch:
         raise KeyError("architecture")
     cfg["architecture"] = arch

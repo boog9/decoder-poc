@@ -98,3 +98,39 @@ def test_load_model_with_missing_architecture(monkeypatch, tmp_path):
     assert recorded['name'] == 'dummy_arch'
     assert recorded['scale'] == 4
     assert recorded['cfg']['architecture'] == 'dummy_arch'
+
+
+def test_load_model_with_architectures_list(monkeypatch, tmp_path):
+    recorded = {}
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"architectures": ["list_arch"]}')
+
+    def fake_hf_download(repo, filename):
+        assert filename == "config.json"
+        return str(cfg_path)
+
+    def fake_create_model(name, pretrained=True, pretrained_cfg=None, scale=None):
+        recorded['name'] = name
+        recorded['scale'] = scale
+        recorded['cfg'] = pretrained_cfg
+
+        class Dummy:
+            def eval(self):
+                return self
+
+            def to(self, device):
+                return self
+
+        return Dummy()
+
+    monkeypatch.setitem(sys.modules, 'huggingface_hub', types.SimpleNamespace(hf_hub_download=fake_hf_download))
+    monkeypatch.setitem(sys.modules, 'timm', types.SimpleNamespace(create_model=fake_create_model))
+    monkeypatch.setitem(sys.modules, 'torch', types.SimpleNamespace())
+
+    importlib.reload(fe)
+    fe._load_model('cpu')
+
+    assert recorded['name'] == 'list_arch'
+    assert recorded['scale'] == 4
+    assert recorded['cfg']['architecture'] == 'list_arch'
