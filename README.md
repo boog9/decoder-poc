@@ -21,3 +21,11 @@ Example output:
 
 The script requires FFmpeg to be installed and available on the system path.
 
+## Frame Enhancement CLI
+
+Enhance extracted frames using the Swin2SR model. Requires a CUDA-enabled GPU.
+
+```
+python -m src.frame_enhancer --input-dir frames/ --output-dir frames_sr/ --batch-size 4
+```
+
