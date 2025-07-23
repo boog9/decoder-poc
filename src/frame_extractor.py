@@ -17,6 +17,7 @@ import argparse
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -51,6 +52,8 @@ def extract_frames(input_video: Path, output_dir: Path, fps: int) -> None:
 
     LOGGER.info("Running command: %s", " ".join(cmd))
 
+    frames_processed = 0
+    start = time.monotonic()
     with subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -62,12 +65,17 @@ def extract_frames(input_video: Path, output_dir: Path, fps: int) -> None:
         for line in proc.stdout:
             line = line.strip()
             if line.startswith("frame="):
-                LOGGER.info(line)
+                frames_processed = int(line.split("=", 1)[1])
+                LOGGER.debug(line)
             elif line.startswith("progress=") and line != "progress=continue":
-                LOGGER.info(line)
+                LOGGER.debug(line)
 
+    elapsed = time.monotonic() - start
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, cmd)
+    LOGGER.info(
+        "Completed extraction of %d frames in %.2f seconds", frames_processed, elapsed
+    )
 
 
 def parse_args() -> argparse.Namespace:

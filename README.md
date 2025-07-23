@@ -13,13 +13,11 @@ python src/frame_extractor.py -i <video.mp4> -o /path/to/output -f 30
 - `-f`, `--fps`: Frames per second to extract (default: 30).
 - `-v`, `--verbose`: Increase logging detail.
 
-Example output logs:
+Example output:
 
 ```
 2024-01-01 12:00:00 - INFO - Running command: ffmpeg -i input.mp4 -vf fps=30 output/frame_%06d.jpg -loglevel error -progress pipe:1
-2024-01-01 12:00:01 - INFO - frame=1
-...
-2024-01-01 12:00:02 - INFO - progress=end
+2024-01-01 12:00:05 - INFO - Completed extraction of 150 frames in 5.00 seconds
 ```
 
 The script requires FFmpeg to be installed and available on the system path.
