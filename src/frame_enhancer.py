@@ -28,6 +28,9 @@ except ImportError as exc:  # pragma: no cover - dependency missing
     
 from tqdm import tqdm
 
+MODEL_NAME = "caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr"
+SCALE = 4
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -60,7 +63,7 @@ def _load_model(device: str):
     import timm
     import torch
 
-    model = timm.create_model("swin2sr-lightweight-x4-64", pretrained=True)
+    model = timm.create_model(MODEL_NAME, pretrained=True, scale=SCALE)
 
     model = model.eval().to(device)
     return model
