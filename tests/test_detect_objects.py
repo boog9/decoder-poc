@@ -145,7 +145,7 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         dobj,
         "_preprocess_image",
-        lambda p, s: (DummyTensor(), 10, 10),
+        lambda p, s: (DummyTensor(), 1.0, 0, 0, 10, 10),
     )
 
     out_json = tmp_path / "det.json"
