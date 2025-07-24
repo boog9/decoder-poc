@@ -165,38 +165,41 @@ def _clone_to_cpu(t: torch.Tensor) -> torch.Tensor:
     return t.detach().cpu().clone()
 
 
-def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
-    """Decode YOLOX outputs ensuring cached tensors reside on the GPU.
+def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
+    """Decode YOLOX outputs with caching on the GPU.
 
-    The first call performs a warm-up decode on the CPU so that the model's
-    cached tensors (``grids`` and ``expanded_strides``) are allocated. These
-    buffers are then moved to CUDA. Subsequent invocations decode directly on
-    the GPU using a fresh list to avoid in-place modifications by YOLOX.
+    The first invocation performs a warm-up decode on the CPU using a deep copy
+    of ``outs`` so that internal buffers (``grids`` and ``expanded_strides``)
+    are allocated. These buffers are then transferred to CUDA. Subsequent calls
+    decode directly on the GPU without additional copies.
     """
 
-    if not getattr(head, "_buffers_synced", False):
-        if isinstance(outs, list):
-            outs_cpu = [_clone_to_cpu(t) for t in outs]
-            dtype = outs[0].dtype
-        else:
-            outs_cpu = _clone_to_cpu(outs)
-            dtype = outs.dtype
+    device = outs[0].device if isinstance(outs, list) else outs.device
 
-        _ = head.decode_outputs(outs_cpu, dtype=dtype)
+    if device.type == "cuda" and not getattr(head, "_buffers_synced", False):
+        if isinstance(outs, list):
+            outs_cpu = [t.detach().cpu().clone() for t in outs]
+            dtype = outs_cpu[0].dtype
+        else:
+            outs_cpu = outs.detach().cpu().clone()
+            dtype = outs_cpu.dtype
+
+        head.decode_outputs(outs_cpu, dtype=dtype)
 
         for name in ("grids", "expanded_strides", "strides"):
             buf = getattr(head, name, None)
             if isinstance(buf, list):
                 for i, t in enumerate(buf):
                     if torch.is_tensor(t):
-                        buf[i] = t.cuda()
+                        buf[i] = t.to(device)
             elif torch.is_tensor(buf):
-                setattr(head, name, buf.cuda())
+                setattr(head, name, buf.to(device))
 
         head._buffers_synced = True
 
     outs_gpu = list(outs) if isinstance(outs, list) else outs
-    return head.decode_outputs(outs_gpu, dtype=outs.dtype)
+    dtype = outs_gpu[0].dtype if isinstance(outs_gpu, list) else outs_gpu.dtype
+    return head.decode_outputs(outs_gpu, dtype=dtype)
 
 
 
