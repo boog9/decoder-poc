@@ -125,3 +125,15 @@ python -m src.draw_roi \
 
 The command reads detection results from ``detections.json`` and writes
 annotated images to ``frames_roi`` using red rectangles by default.
+
+## Detection Validation CLI
+
+Run simple quality checks on detection results.
+
+```bash
+python -m src.validate_detections sanity-check \
+    --detections detections.json \
+    --frames-dir frames/
+```
+
+This prints the number of invalid bounding boxes and low-confidence detections.
