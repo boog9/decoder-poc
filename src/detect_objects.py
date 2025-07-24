@@ -141,9 +141,9 @@ def _filter_detections(
     outputs: Sequence[Sequence[float]],
     conf_thr: float,
 ) -> List[Tuple[List[float], float, int]]:
-    """Filter YOLOX detections for person, racket and ball classes."""
+    """Filter YOLOX detections for the person class."""
 
-    keep_ids = {0, 29, 32}
+    keep_ids = {0}
     return [
         (
             [float(det[0]), float(det[1]), float(det[2]), float(det[3])],
@@ -167,7 +167,7 @@ def detect_folder(
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
-    Only detections of the ``person``, ``racket`` and ``ball`` classes are kept.
+    Only detections of the ``person`` class are kept.
 
     Args:
         frames_dir: Directory containing frame images.
