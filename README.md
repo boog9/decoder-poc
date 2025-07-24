@@ -111,3 +111,17 @@ This image installs YOLOX and its dependencies using the official
 ``pytorch/pytorch`` CUDA runtime as the base image, which already includes
 PyTorch with GPU support. The YOLOX package is installed directly from the
 GitHub repository to avoid issues with the PyPI release.
+
+## ROI Visualization CLI
+
+Overlay detection bounding boxes on extracted frames.
+
+```bash
+python -m src.draw_roi \
+    --frames-dir frames/ \
+    --detections-json detections.json \
+    --output-dir frames_roi/
+```
+
+The command reads detection results from ``detections.json`` and writes
+annotated images to ``frames_roi`` using red rectangles by default.
