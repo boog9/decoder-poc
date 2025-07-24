@@ -221,7 +221,7 @@ def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
     out_json = tmp_path / "det.json"
     dobj.detect_folder(frames, out_json, "yolox-s", 640)
 
-    assert not head.called
+    assert head.called
     with out_json.open() as fh:
         data = json.load(fh)
     assert data and data[0]["detections"]
