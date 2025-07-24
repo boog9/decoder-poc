@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence
 
 from PIL import Image
+import inspect
 from tqdm import tqdm
 
 import torch
@@ -156,6 +157,23 @@ def _filter_detections(
     ]
 
 
+def _decode_with_compat(
+    head: object, outputs: torch.Tensor, img_size: int
+) -> torch.Tensor:
+    """Call ``head.decode_outputs`` supporting multiple API versions."""
+
+    params = list(inspect.signature(head.decode_outputs).parameters.keys())
+    if len(params) >= 2 and params[1] == "dtype":
+        dtype = getattr(outputs, "dtype", None)
+        if dtype is None and isinstance(outputs, list) and outputs:
+            dtype = getattr(outputs[0], "dtype", None)
+        kwargs = {"dtype": dtype}
+        if "img_size" in params:
+            kwargs["img_size"] = (img_size, img_size)
+        return head.decode_outputs(outputs, **kwargs)
+    return head.decode_outputs(outputs, (img_size, img_size))
+
+
 
 
 def detect_folder(
@@ -197,7 +215,7 @@ def detect_folder(
             tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
-            outputs = model.head.decode_outputs(outputs, (img_size, img_size))
+            outputs = _decode_with_compat(model.head, outputs, img_size)
             from yolox.utils import postprocess
 
             processed = postprocess(
