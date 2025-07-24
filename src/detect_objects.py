@@ -160,18 +160,25 @@ def _filter_detections(
 
 
 def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
-    """Decode model outputs on CUDA and move cached buffers."""
+    """Decode model outputs on the same device as ``outs``.
 
-    for attr in ("grids", "expanded_strides", "strides"):
-        buf = getattr(head, attr, None)
-        if isinstance(buf, list):
-            setattr(
-                head,
-                attr,
-                [t.cuda() if hasattr(t, "cuda") else t for t in buf],
-            )
-        elif hasattr(buf, "cuda"):
-            setattr(head, attr, buf.cuda())
+    YOLOX caches several tensors on the detection head (e.g. grids). If these
+    tensors remain on the CPU while the model outputs are on the GPU, a device
+    mismatch error is raised when ``decode_outputs`` is called. This helper
+    ensures all cached tensors are moved to ``outs.device`` before decoding. To
+    avoid unnecessary copies, caches are moved only once per head.
+    """
+
+    if outs.device.type == "cuda" and not getattr(head, "_buffers_on_gpu", False):
+        for name in ("grids", "expanded_strides", "strides"):
+            buf = getattr(head, name, None)
+            if isinstance(buf, list):
+                for i, t in enumerate(buf):
+                    if torch.is_tensor(t):
+                        buf[i] = t.to(outs.device)
+            elif torch.is_tensor(buf):
+                setattr(head, name, buf.to(outs.device))
+        head._buffers_on_gpu = True
 
     return head.decode_outputs(outs, dtype=outs.dtype)
 
