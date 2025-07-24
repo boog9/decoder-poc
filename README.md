@@ -89,5 +89,20 @@ python -m src.detect_objects \
     --model yolox-s
 ```
 
-See ``Dockerfile.detect`` for a GPU-enabled image containing the required
-dependencies.
+To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
+
+```bash
+docker build -f Dockerfile.detect -t decoder-detect:latest --progress=plain .
+```
+
+Run detection inside the container (assumes frames are in ``./frames``):
+
+```bash
+docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+    --frames-dir frames/ \
+    --output-json detections.json \
+    --model yolox-s
+```
+
+This image installs YOLOX and its dependencies, including ``cmake`` for
+building the model from source.
