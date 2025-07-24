@@ -159,28 +159,31 @@ def _filter_detections(
     ]
 
 
+def _clone_to_cpu(t: torch.Tensor) -> torch.Tensor:
+    """Return a detached clone of ``t`` on the CPU."""
+
+    return t.detach().cpu().clone()
+
+
 def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
     """Decode YOLOX outputs ensuring cached tensors reside on the GPU.
 
-    YOLOX caches several tensors on the detection head (``grids`` and
-    ``expanded_strides``). On the first call these buffers are allocated on the
-    CPU, which leads to a device mismatch if ``outs`` is on CUDA.  This function
-    performs an initial decode on the CPU to populate the caches and then moves
-    them to the GPU. Subsequent calls run directly on CUDA without extra copies.
+    The first call performs a warm-up decode on the CPU so that the model's
+    cached tensors (``grids`` and ``expanded_strides``) are allocated. These
+    buffers are then moved to CUDA. Subsequent invocations decode directly on
+    the GPU using a fresh list to avoid in-place modifications by YOLOX.
     """
 
     if not getattr(head, "_buffers_synced", False):
-        # First call: decode on CPU so the internal buffers are created there
         if isinstance(outs, list):
-            outs_cpu = [o.cpu() for o in outs]
-            dtype = outs_cpu[0].dtype
+            outs_cpu = [_clone_to_cpu(t) for t in outs]
+            dtype = outs[0].dtype
         else:
-            outs_cpu = outs.cpu()
-            dtype = outs_cpu.dtype
+            outs_cpu = _clone_to_cpu(outs)
+            dtype = outs.dtype
 
-        decoded = head.decode_outputs(outs_cpu, dtype=dtype)
+        _ = head.decode_outputs(outs_cpu, dtype=dtype)
 
-        # Move cached buffers to GPU for future calls
         for name in ("grids", "expanded_strides", "strides"):
             buf = getattr(head, name, None)
             if isinstance(buf, list):
@@ -191,10 +194,9 @@ def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
                 setattr(head, name, buf.cuda())
 
         head._buffers_synced = True
-        return decoded.cuda()
 
-    dtype = outs[0].dtype if isinstance(outs, list) else outs.dtype
-    return head.decode_outputs(outs, dtype=dtype)
+    outs_gpu = list(outs) if isinstance(outs, list) else outs
+    return head.decode_outputs(outs_gpu, dtype=outs.dtype)
 
 
 
