@@ -139,3 +139,27 @@ python -m src.validate_detections sanity-check \
 ```
 
 This prints the number of invalid bounding boxes and low-confidence detections.
+
+## Single Image Detection Demo
+
+A small container is provided to run YOLOX on a single image. Build it with:
+
+```bash
+docker build -f Dockerfile.image -t decoder-image:latest .
+```
+
+Run detection on ``frame_000019.jpg`` using the GPU:
+
+```bash
+docker run --gpus all --rm -v $(pwd):/app decoder-image:latest \
+    --image /app/frames01/frame_000019.jpg \
+    --model yolox-x \
+    --conf-thres 0.10 \
+    --nms-thres 0.45 \
+    --img-size 640 \
+    --device gpu \
+    --save-result /app/out.jpg
+```
+
+The command prints the detections as JSON and saves the annotated image to
+``out.jpg``.
