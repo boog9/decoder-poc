@@ -95,6 +95,10 @@ def test_decode_gpu_moves_buffers() -> None:
             self.device = device
             self.dtype = "float32"
 
+        def cpu(self):
+            self.device = "cpu"
+            return self
+
         def cuda(self):
             self.device = "cuda"
             return self
@@ -113,6 +117,8 @@ def test_decode_gpu_moves_buffers() -> None:
     assert decoded == [out]
     assert head.grids[0].device == "cuda"
     assert head.expanded_strides[0].device == "cuda"
+    assert getattr(head, "_buffers_synced", False)
+    assert out.device == "cuda"
 
 
 def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
