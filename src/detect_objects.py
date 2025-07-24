@@ -50,7 +50,10 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--frames-dir", type=Path, required=True, help="Directory of input frames"
+        "--frames-dir",
+        type=Path,
+        required=True,
+        help="Directory of input frames",
     )
     parser.add_argument(
         "--output-json",
@@ -90,22 +93,37 @@ def _load_model(model_name: str, device: str = "cuda"):
     return model
 
 
-def _preprocess_image(path: Path, size: int) -> torch.Tensor:
-    """Load image and resize to ``size`` square tensor.
+def _letterbox_image(
+    img: Image.Image, size: int
+) -> tuple[Image.Image, float, int, int]:
+    """Resize ``img`` with unchanged aspect ratio using padding."""
 
-    Args:
-        path: Path to the image file.
-        size: Desired output width/height. Must be divisible by 32.
+    w0, h0 = img.size
+    ratio = min(size / w0, size / h0)
+    new_w, new_h = int(w0 * ratio), int(h0 * ratio)
+    resized = img.resize((new_w, new_h))
+    pad_x = (size - new_w) // 2
+    pad_y = (size - new_h) // 2
+    canvas = Image.new("RGB", (size, size), (114, 114, 114))
+    canvas.paste(resized, (pad_x, pad_y))
+    return canvas, ratio, pad_x, pad_y
 
-    Returns:
-        Image tensor suitable for YOLOX inference.
+
+def _preprocess_image(
+    path: Path, size: int
+) -> tuple[torch.Tensor, float, int, int, int, int]:
+    """Load image and letterbox to ``size`` square tensor.
+
+    Returns the tensor and resize metadata for back-projection.
     """
+
     if size % 32 != 0:
         raise ValueError("img_size must be a multiple of 32")
     img = Image.open(path).convert("RGB")
-    img = img.resize((size, size))
+    w0, h0 = img.size
+    img, ratio, pad_x, pad_y = _letterbox_image(img, size)
     tensor = to_tensor(img)
-    return tensor
+    return tensor, ratio, pad_x, pad_y, w0, h0
 
 
 def _filter_person_detections(
@@ -124,7 +142,29 @@ def _filter_person_detections(
     return results
 
 
-def detect_folder(frames_dir: Path, out_json: Path, model_name: str, img_size: int) -> None:
+def _deletterbox(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    ratio: float,
+    pad_x: int,
+    pad_y: int,
+    w0: int,
+    h0: int,
+) -> tuple[int, int, int, int]:
+    """Map letterboxed coordinates back to the original image."""
+
+    x0 = max((x0 - pad_x) / ratio, 0.0)
+    x1 = min((x1 - pad_x) / ratio, float(w0))
+    y0 = max((y0 - pad_y) / ratio, 0.0)
+    y1 = min((y1 - pad_y) / ratio, float(h0))
+    return int(x0), int(y0), int(x1), int(y1)
+
+
+def detect_folder(
+    frames_dir: Path, out_json: Path, model_name: str, img_size: int
+) -> None:
     """Run detection over ``frames_dir`` and write results.
 
     Args:
@@ -136,7 +176,11 @@ def detect_folder(frames_dir: Path, out_json: Path, model_name: str, img_size: i
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _load_model(model_name, device)
     frames = sorted(
-        [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
+        [
+            p
+            for p in frames_dir.iterdir()
+            if p.suffix.lower() in {".jpg", ".png"}
+        ]
     )
     if not frames:
         LOGGER.warning("No frames found in %s", frames_dir)
@@ -146,13 +190,30 @@ def detect_folder(frames_dir: Path, out_json: Path, model_name: str, img_size: i
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
-            tensor = _preprocess_image(frame, img_size).unsqueeze(0).to(device)
+            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(
+                frame, img_size
+            )
+            tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
-            detections = [
-                {"bbox": b, "score": s, "class": c}
-                for b, s, c in _filter_person_detections(outputs)
-            ]
+
+            detections = []
+            for bbox, score, cls in _filter_person_detections(outputs):
+                x0, y0, x1, y1 = _deletterbox(
+                    bbox[0],
+                    bbox[1],
+                    bbox[2],
+                    bbox[3],
+                    ratio,
+                    pad_x,
+                    pad_y,
+                    w0,
+                    h0,
+                )
+                detections.append(
+                    {"bbox": [x0, y0, x1, y1], "score": score, "class": cls}
+                )
+
             out.append({"frame": frame.name, "detections": detections})
             pbar.update(1)
     elapsed = time.perf_counter() - start
@@ -161,8 +222,8 @@ def detect_folder(frames_dir: Path, out_json: Path, model_name: str, img_size: i
         free, total = torch.cuda.mem_get_info()
         LOGGER.info(
             "GPU memory: %.2f/%.2f GB used",
-            (total - free) / 1024 ** 3,
-            total / 1024 ** 3,
+            (total - free) / 1024**3,
+            total / 1024**3,
         )
     LOGGER.info("Processed %d frames in %.2fs", len(frames), elapsed)
 
@@ -174,9 +235,13 @@ def detect_folder(frames_dir: Path, out_json: Path, model_name: str, img_size: i
 def main(argv: Iterable[str] | None = None) -> None:
     """CLI entrypoint."""
     args = parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
+    )
     try:
-        detect_folder(args.frames_dir, args.output_json, args.model, args.img_size)
+        detect_folder(
+            args.frames_dir, args.output_json, args.model, args.img_size
+        )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Detection failed: %s", exc)
         raise SystemExit(1) from exc
