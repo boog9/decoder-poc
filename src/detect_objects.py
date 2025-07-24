@@ -165,7 +165,11 @@ def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
     for attr in ("grids", "expanded_strides", "strides"):
         buf = getattr(head, attr, None)
         if isinstance(buf, list):
-            setattr(head, attr, [t.cuda() for t in buf])
+            setattr(
+                head,
+                attr,
+                [t.cuda() if hasattr(t, "cuda") else t for t in buf],
+            )
         elif hasattr(buf, "cuda"):
             setattr(head, attr, buf.cuda())
 
