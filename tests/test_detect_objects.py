@@ -75,6 +75,7 @@ def test_parse_args_defaults() -> None:
     ])
     assert isinstance(args, argparse.Namespace)
     assert args.model == "yolox-s"
+    assert args.img_size == 640
 
 
 def test_load_model_translates_hyphen(monkeypatch) -> None:
@@ -131,10 +132,10 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
         def to(self, device):
             return self
 
-    monkeypatch.setattr(dobj, "_preprocess_image", lambda p: DummyTensor())
+    monkeypatch.setattr(dobj, "_preprocess_image", lambda p, s: DummyTensor())
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s")
+    dobj.detect_folder(frames, out_json, "yolox-s", 640)
 
     with out_json.open() as fh:
         data = json.load(fh)

@@ -40,7 +40,14 @@ _YOLOX_MODEL_MAP = {
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    """Parse CLI arguments."""
+    """Parse CLI arguments for :mod:`detect_objects`.
+
+    Args:
+        argv: Optional list of command line arguments.
+
+    Returns:
+        Parsed arguments namespace.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--frames-dir", type=Path, required=True, help="Directory of input frames"
@@ -58,6 +65,15 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         choices=sorted(YOLOX_MODELS),
         help="YOLOX model variant",
     )
+    parser.add_argument(
+        "--img-size",
+        type=int,
+        default=640,
+        help=(
+            "Resize frames to this square size before detection. "
+            "Should be a multiple of 32 (default: 640)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -74,9 +90,20 @@ def _load_model(model_name: str, device: str = "cuda"):
     return model
 
 
-def _preprocess_image(path: Path) -> torch.Tensor:
-    """Load image from ``path`` and convert to tensor."""
+def _preprocess_image(path: Path, size: int) -> torch.Tensor:
+    """Load image and resize to ``size`` square tensor.
+
+    Args:
+        path: Path to the image file.
+        size: Desired output width/height. Must be divisible by 32.
+
+    Returns:
+        Image tensor suitable for YOLOX inference.
+    """
+    if size % 32 != 0:
+        raise ValueError("img_size must be a multiple of 32")
     img = Image.open(path).convert("RGB")
+    img = img.resize((size, size))
     tensor = to_tensor(img)
     return tensor
 
@@ -97,8 +124,15 @@ def _filter_person_detections(
     return results
 
 
-def detect_folder(frames_dir: Path, out_json: Path, model_name: str) -> None:
-    """Run detection over ``frames_dir`` and write results."""
+def detect_folder(frames_dir: Path, out_json: Path, model_name: str, img_size: int) -> None:
+    """Run detection over ``frames_dir`` and write results.
+
+    Args:
+        frames_dir: Directory containing frame images.
+        out_json: File to write detection results.
+        model_name: Variant name of the YOLOX model to load.
+        img_size: Target input size for the model.
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _load_model(model_name, device)
     frames = sorted(
@@ -112,7 +146,7 @@ def detect_folder(frames_dir: Path, out_json: Path, model_name: str) -> None:
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
-            tensor = _preprocess_image(frame).unsqueeze(0).to(device)
+            tensor = _preprocess_image(frame, img_size).unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
             detections = [
@@ -142,7 +176,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     try:
-        detect_folder(args.frames_dir, args.output_json, args.model)
+        detect_folder(args.frames_dir, args.output_json, args.model, args.img_size)
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Detection failed: %s", exc)
         raise SystemExit(1) from exc
