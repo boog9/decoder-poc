@@ -5,3 +5,4 @@ accelerate>=0.23.0
 safetensors>=0.4.2
 pillow>=10.3
 numpy>=1.26
+loguru>=0.7

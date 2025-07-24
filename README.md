@@ -69,6 +69,10 @@ that ``python`` and ``pip`` come from the same environment:
 python -m pip install -U -r requirements.txt
 ```
 
+The YOLOX models loaded via ``torch.hub`` also require the ``loguru`` package.
+Install it from ``requirements.txt`` or add ``loguru`` separately when running
+the detection CLI.
+
 Alternatively, build the Docker image which installs everything via `make build`.
 The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 ``requirements.txt``.
