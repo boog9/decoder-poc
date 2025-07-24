@@ -109,19 +109,21 @@ def _letterbox_image(
     return canvas, ratio, pad_x, pad_y
 
 
-def _preprocess_image(path: Path, size: int) -> tuple[torch.Tensor, int, int]:
+def _preprocess_image(
+    path: Path, size: int
+) -> tuple[torch.Tensor, float, int, int, int, int]:
     """Load image and letterbox to ``size`` square tensor.
 
-    Returns the tensor and original frame dimensions for optional sanity checks.
+    Returns the tensor along with resize metadata for back-projection.
     """
 
     if size % 32 != 0:
         raise ValueError("img_size must be a multiple of 32")
     img = Image.open(path).convert("RGB")
     w0, h0 = img.size
-    img, _, _, _ = _letterbox_image(img, size)
+    img, ratio, pad_x, pad_y = _letterbox_image(img, size)
     tensor = to_tensor(img)
-    return tensor, w0, h0
+    return tensor, ratio, pad_x, pad_y, w0, h0
 
 
 def _filter_person_detections(
@@ -170,19 +172,26 @@ def detect_folder(
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
-            tensor, w0, h0 = _preprocess_image(frame, img_size)
+            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(frame, img_size)
             tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
 
-            detections = [
-                {
-                    "bbox": [int(b[0]), int(b[1]), int(b[2]), int(b[3])],
-                    "score": s,
-                    "class": c,
-                }
-                for b, s, c in _filter_person_detections(outputs)
-            ]
+            detections = []
+            for bbox, score, cls in _filter_person_detections(outputs):
+                x0 = max((bbox[0] - pad_x) / ratio, 0)
+                y0 = max((bbox[1] - pad_y) / ratio, 0)
+                x1 = min((bbox[2] - pad_x) / ratio, w0)
+                y1 = min((bbox[3] - pad_y) / ratio, h0)
+                if x1 > x0 and y1 > y0:
+                    detections.append(
+                        {
+                            "bbox": [int(x0), int(y0), int(x1), int(y1)],
+                            "score": score,
+                            "class": cls,
+                        }
+                    )
+
             for det in detections:
                 x0, y0, x1, y1 = det["bbox"]
                 assert 0 <= x0 < x1 <= w0 and 0 <= y0 < y1 <= h0
