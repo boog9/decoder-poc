@@ -162,30 +162,29 @@ def _clone_to_cpu(t: torch.Tensor) -> torch.Tensor:
 
 
 def _normalize_outputs(outs: list[torch.Tensor]) -> list[torch.Tensor]:
-    """Ensure all tensors have shape ``[C, H, W]`` by stripping batch dim."""
+    """Normalize model outputs without altering expected dimensions."""
 
-    return [t.squeeze(0) if t.dim() == 4 and t.size(0) == 1 else t for t in outs]
+    # Older versions of YOLOX returned a batch dimension of one which must
+    # remain for :func:`yolo_head.decode_outputs`.  Only squeeze tensors that
+    # have an explicit singleton batch and four dimensions.
+    return [
+        t.squeeze(0) if t.dim() == 4 and t.size(0) == 1 else t
+        for t in outs
+    ]
 
 
 def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
     """Decode YOLOX outputs in CUDA with one-time buffer sync."""
 
-    # ``outs`` may come as a single tensor or a list of tensors.
     if isinstance(outs, list):
-        outs_norm = _normalize_outputs(outs)
-        device = outs_norm[0].device
-        dtype = outs_norm[0].dtype
+        device = outs[0].device
+        dtype = outs[0].dtype
     else:
-        outs_norm = outs
-        device = outs_norm.device
-        dtype = outs_norm.dtype
+        device = outs.device
+        dtype = outs.dtype
 
     if device.type == "cuda" and not getattr(head, "_buffers_synced", False):
-        if isinstance(outs_norm, list):
-            cpu_copy = [t.detach().cpu().clone() for t in outs_norm]
-        else:
-            cpu_copy = outs_norm.detach().cpu().clone()
-
+        cpu_copy = [t.detach().cpu().clone() for t in outs] if isinstance(outs, list) else outs.detach().cpu().clone()
         head.decode_outputs(cpu_copy, dtype=dtype)
 
         for name in ("grids", "expanded_strides", "strides"):
@@ -199,8 +198,8 @@ def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.
 
         head._buffers_synced = True
 
-    outs_for_decode = list(outs_norm) if isinstance(outs_norm, list) else outs_norm
-    return head.decode_outputs(outs_for_decode, dtype=dtype)
+    outs_gpu = [t for t in outs] if isinstance(outs, list) else outs
+    return head.decode_outputs(outs_gpu, dtype=outs_gpu[0].dtype if isinstance(outs_gpu, list) else outs_gpu.dtype)
 
 
 def detect_folder(
