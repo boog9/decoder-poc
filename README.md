@@ -69,8 +69,9 @@ that ``python`` and ``pip`` come from the same environment:
 python -m pip install -U -r requirements.txt
 ```
 
-The YOLOX models loaded via ``torch.hub`` also require the ``loguru`` package.
-Install it from ``requirements.txt`` or add ``loguru`` separately when running
+The YOLOX models loaded via ``torch.hub`` also require the ``loguru`` package
+and OpenCV. Both ``loguru`` and ``opencv-python-headless`` are included in
+``requirements.txt``. Install them or add the packages separately when running
 the detection CLI.
 
 Alternatively, build the Docker image which installs everything via `make build`.
