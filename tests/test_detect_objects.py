@@ -114,10 +114,10 @@ def test_decode_gpu_moves_buffers() -> None:
 
     decoded = dobj._decode_gpu(head, out)
 
-    assert decoded == [out]
+    assert isinstance(decoded, list) and decoded[0].device == "cuda"
     assert head.grids[0].device == "cuda"
     assert head.expanded_strides[0].device == "cuda"
-    assert getattr(head, "_buffers_synced", False)
+    assert getattr(head, "_buf_sync", False)
     assert out.device == "cuda"
 
 
@@ -148,10 +148,10 @@ def test_decode_gpu_handles_list_outputs() -> None:
     decoded = dobj._decode_gpu(head, outs)
 
     assert isinstance(decoded, DummyTensor)
-    assert head.received == ["cpu", "cpu", "cpu"]
+    assert head.received == ["cuda", "cuda", "cuda"]
     assert head.grids[0].device == "cuda"
     assert head.expanded_strides[0].device == "cuda"
-    assert getattr(head, "_buffers_synced", False)
+    assert getattr(head, "_buf_sync", False)
 
 
 def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:

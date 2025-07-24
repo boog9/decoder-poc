@@ -161,6 +161,18 @@ def _clone_to_cpu(t: torch.Tensor) -> torch.Tensor:
     return t.detach().cpu().clone()
 
 
+def _clone_pyramid(outs: list[torch.Tensor], device: str) -> list[torch.Tensor]:
+    """Deeply clone pyramid outputs and ensure batch dimension."""
+
+    clones: list[torch.Tensor] = []
+    for t in outs:
+        t = t.detach().clone().to(device)
+        if t.dim() == 3:
+            t = t.unsqueeze(0)
+        clones.append(t)
+    return clones
+
+
 def _normalize_outputs(outs: list[torch.Tensor]) -> list[torch.Tensor]:
     """Normalize model outputs without altering expected dimensions."""
 
@@ -176,15 +188,12 @@ def _normalize_outputs(outs: list[torch.Tensor]) -> list[torch.Tensor]:
 def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
     """Decode YOLOX outputs in CUDA with one-time buffer sync."""
 
-    if isinstance(outs, list):
-        device = outs[0].device
-        dtype = outs[0].dtype
-    else:
-        device = outs.device
-        dtype = outs.dtype
+    lst = isinstance(outs, list)
+    device = (outs[0] if lst else outs).device
+    dtype = (outs[0] if lst else outs).dtype
 
-    if device.type == "cuda" and not getattr(head, "_buffers_synced", False):
-        cpu_copy = [t.detach().cpu().clone() for t in outs] if isinstance(outs, list) else outs.detach().cpu().clone()
+    if device.type == "cuda" and not getattr(head, "_buf_sync", False):
+        cpu_copy = _clone_pyramid(outs if lst else [outs], "cpu")
         head.decode_outputs(cpu_copy, dtype=dtype)
 
         for name in ("grids", "expanded_strides", "strides"):
@@ -192,14 +201,13 @@ def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.
             if isinstance(buf, list):
                 for i, t in enumerate(buf):
                     if torch.is_tensor(t):
-                        buf[i] = t.to(device)
+                        buf[i] = t.cuda()
             elif torch.is_tensor(buf):
-                setattr(head, name, buf.to(device))
+                setattr(head, name, buf.cuda())
+        head._buf_sync = True
 
-        head._buffers_synced = True
-
-    outs_gpu = [t for t in outs] if isinstance(outs, list) else outs
-    return head.decode_outputs(outs_gpu, dtype=outs_gpu[0].dtype if isinstance(outs_gpu, list) else outs_gpu.dtype)
+    outs_gpu = _clone_pyramid(outs if lst else [outs], device)
+    return head.decode_outputs(outs_gpu, dtype=dtype)
 
 
 def detect_folder(
