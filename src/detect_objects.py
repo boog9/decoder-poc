@@ -109,21 +109,19 @@ def _letterbox_image(
     return canvas, ratio, pad_x, pad_y
 
 
-def _preprocess_image(
-    path: Path, size: int
-) -> tuple[torch.Tensor, float, int, int, int, int]:
+def _preprocess_image(path: Path, size: int) -> tuple[torch.Tensor, int, int]:
     """Load image and letterbox to ``size`` square tensor.
 
-    Returns the tensor and resize metadata for back-projection.
+    Returns the tensor and original frame dimensions for optional sanity checks.
     """
 
     if size % 32 != 0:
         raise ValueError("img_size must be a multiple of 32")
     img = Image.open(path).convert("RGB")
     w0, h0 = img.size
-    img, ratio, pad_x, pad_y = _letterbox_image(img, size)
+    img, _, _, _ = _letterbox_image(img, size)
     tensor = to_tensor(img)
-    return tensor, ratio, pad_x, pad_y, w0, h0
+    return tensor, w0, h0
 
 
 def _filter_person_detections(
@@ -142,24 +140,6 @@ def _filter_person_detections(
     return results
 
 
-def _deletterbox(
-    x0: float,
-    y0: float,
-    x1: float,
-    y1: float,
-    ratio: float,
-    pad_x: int,
-    pad_y: int,
-    w0: int,
-    h0: int,
-) -> tuple[int, int, int, int]:
-    """Map letterboxed coordinates back to the original image."""
-
-    x0 = max((x0 - pad_x) / ratio, 0.0)
-    x1 = min((x1 - pad_x) / ratio, float(w0))
-    y0 = max((y0 - pad_y) / ratio, 0.0)
-    y1 = min((y1 - pad_y) / ratio, float(h0))
-    return int(x0), int(y0), int(x1), int(y1)
 
 
 def detect_folder(
@@ -190,29 +170,22 @@ def detect_folder(
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
-            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(
-                frame, img_size
-            )
+            tensor, w0, h0 = _preprocess_image(frame, img_size)
             tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
 
-            detections = []
-            for bbox, score, cls in _filter_person_detections(outputs):
-                x0, y0, x1, y1 = _deletterbox(
-                    bbox[0],
-                    bbox[1],
-                    bbox[2],
-                    bbox[3],
-                    ratio,
-                    pad_x,
-                    pad_y,
-                    w0,
-                    h0,
-                )
-                detections.append(
-                    {"bbox": [x0, y0, x1, y1], "score": score, "class": cls}
-                )
+            detections = [
+                {
+                    "bbox": [int(b[0]), int(b[1]), int(b[2]), int(b[3])],
+                    "score": s,
+                    "class": c,
+                }
+                for b, s, c in _filter_person_detections(outputs)
+            ]
+            for det in detections:
+                x0, y0, x1, y1 = det["bbox"]
+                assert 0 <= x0 < x1 <= w0 and 0 <= y0 < y1 <= h0
 
             out.append({"frame": frame.name, "detections": detections})
             pbar.update(1)
