@@ -121,6 +121,39 @@ def test_decode_gpu_moves_buffers() -> None:
     assert out.device == "cuda"
 
 
+def test_decode_gpu_handles_list_outputs() -> None:
+    class DummyTensor:
+        def __init__(self, device: str = "cuda") -> None:
+            self.device = device
+            self.dtype = "float32"
+
+        def cpu(self):
+            self.device = "cpu"
+            return self
+
+        def cuda(self):
+            self.device = "cuda"
+            return self
+
+    class DummyHead:
+        def decode_outputs(self, out, dtype):
+            self.received = [t.device for t in out]
+            self.grids = [DummyTensor()]
+            self.expanded_strides = [DummyTensor()]
+            return DummyTensor()
+
+    head = DummyHead()
+    outs = [DummyTensor(), DummyTensor(), DummyTensor()]
+
+    decoded = dobj._decode_gpu(head, outs)
+
+    assert isinstance(decoded, DummyTensor)
+    assert head.received == ["cpu", "cpu", "cpu"]
+    assert head.grids[0].device == "cuda"
+    assert head.expanded_strides[0].device == "cuda"
+    assert getattr(head, "_buffers_synced", False)
+
+
 def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     frames = tmp_path / "frames"
     frames.mkdir()

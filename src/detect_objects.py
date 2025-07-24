@@ -171,8 +171,14 @@ def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
 
     if not getattr(head, "_buffers_synced", False):
         # First call: decode on CPU so the internal buffers are created there
-        outs_cpu = outs.cpu()
-        decoded = head.decode_outputs(outs_cpu, dtype=outs_cpu.dtype)
+        if isinstance(outs, list):
+            outs_cpu = [o.cpu() for o in outs]
+            dtype = outs_cpu[0].dtype
+        else:
+            outs_cpu = outs.cpu()
+            dtype = outs_cpu.dtype
+
+        decoded = head.decode_outputs(outs_cpu, dtype=dtype)
 
         # Move cached buffers to GPU for future calls
         for name in ("grids", "expanded_strides", "strides"):
@@ -187,7 +193,8 @@ def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
         head._buffers_synced = True
         return decoded.cuda()
 
-    return head.decode_outputs(outs, dtype=outs.dtype)
+    dtype = outs[0].dtype if isinstance(outs, list) else outs.dtype
+    return head.decode_outputs(outs, dtype=dtype)
 
 
 
