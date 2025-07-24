@@ -242,10 +242,31 @@ def detect_folder(
             tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
-            if hasattr(outputs, "tolist"):
-                outputs_list = outputs.tolist()
+
+            # Optional YOLOX decoding and post-processing
+            try:
+                if hasattr(model, "head") and hasattr(model.head, "decode_outputs"):
+                    outputs = model.head.decode_outputs(outputs, (img_size, img_size))
+                from yolox.utils import postprocess as _yolox_post
+            except Exception:  # pragma: no cover - YOLOX not installed in tests
+                _yolox_post = None
+
+            if _yolox_post is not None:
+                processed = _yolox_post(
+                    outputs,
+                    num_classes=80,
+                    conf_thre=conf_thres,
+                    nms_thre=nms_thres,
+                    class_agnostic=False,
+                )
+                if processed:
+                    det = processed[0]
+                    outputs_list = [det.tolist()] if hasattr(det, "tolist") else [det]
+                else:
+                    outputs_list = []
             else:
-                outputs_list = outputs
+                outputs_list = outputs.tolist() if hasattr(outputs, "tolist") else outputs
+
             detections = []
             for bbox, score, cls in _filter_detections(outputs_list, conf_thres, nms_thres):
                 x0 = max((bbox[0] - pad_x) / ratio, 0.0)
