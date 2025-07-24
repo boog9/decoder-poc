@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import sys
 import types
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 torch_stub = types.ModuleType("torch")
@@ -26,12 +27,14 @@ torch_stub.cuda = types.SimpleNamespace(
 )
 torch_stub.hub = types.SimpleNamespace(load=lambda *a, **k: None)
 
+
 class _NoGrad:
     def __enter__(self):
         return None
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
 
 torch_stub.no_grad = lambda: _NoGrad()
 sys.modules.setdefault("torch", torch_stub)
@@ -42,9 +45,13 @@ tv_transforms.functional = types.SimpleNamespace(to_tensor=lambda x: x)
 tv_stub.transforms = tv_transforms
 sys.modules.setdefault("torchvision", tv_stub)
 sys.modules.setdefault("torchvision.transforms", tv_transforms)
-sys.modules.setdefault("torchvision.transforms.functional", tv_transforms.functional)
+sys.modules.setdefault(
+    "torchvision.transforms.functional", tv_transforms.functional
+)
 
 sys.modules.setdefault("PIL", types.ModuleType("PIL")).Image = object()
+
+
 class _DummyTqdm:
     def __init__(self, *a, **k):
         pass
@@ -61,18 +68,21 @@ class _DummyTqdm:
     def set_postfix(self, *a, **k):
         pass
 
+
 sys.modules.setdefault("tqdm", types.ModuleType("tqdm")).tqdm = _DummyTqdm
 
 import src.detect_objects as dobj
 
 
 def test_parse_args_defaults() -> None:
-    args = dobj.parse_args([
-        "--frames-dir",
-        "frames",
-        "--output-json",
-        "out.json",
-    ])
+    args = dobj.parse_args(
+        [
+            "--frames-dir",
+            "frames",
+            "--output-json",
+            "out.json",
+        ]
+    )
     assert isinstance(args, argparse.Namespace)
     assert args.model == "yolox-s"
     assert args.img_size == 640
@@ -132,7 +142,11 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
         def to(self, device):
             return self
 
-    monkeypatch.setattr(dobj, "_preprocess_image", lambda p, s: DummyTensor())
+    monkeypatch.setattr(
+        dobj,
+        "_preprocess_image",
+        lambda p, s: (DummyTensor(), 1.0, 0, 0, 10, 10),
+    )
 
     out_json = tmp_path / "det.json"
     dobj.detect_folder(frames, out_json, "yolox-s", 640)
@@ -141,3 +155,5 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
         data = json.load(fh)
     assert len(data) == 2
     assert data[0]["detections"][0]["class"] == 0
+    bbox = data[0]["detections"][0]["bbox"]
+    assert all(isinstance(v, int) for v in bbox)

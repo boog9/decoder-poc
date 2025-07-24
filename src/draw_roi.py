@@ -24,7 +24,6 @@ from PIL import Image, ImageDraw
 LOGGER = logging.getLogger(__name__)
 
 
-
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -55,7 +54,6 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-
 def _load_detections(path: Path) -> List[dict]:
     """Load detection list from ``path``."""
     with path.open() as fh:
@@ -84,8 +82,12 @@ def _sanitize_bbox(bbox: List[float]) -> Tuple[float, float, float, float]:
     return x1, y1, x2, y2
 
 
-
-def draw_rois(frames_dir: Path, detections_json: Path, output_dir: Path, color: str = "red") -> None:
+def draw_rois(
+    frames_dir: Path,
+    detections_json: Path,
+    output_dir: Path,
+    color: str = "red",
+) -> None:
     """Overlay detection ROIs on frames and save to ``output_dir``.
 
     Args:
@@ -114,19 +116,24 @@ def draw_rois(frames_dir: Path, detections_json: Path, output_dir: Path, color: 
                 LOGGER.debug("Invalid bbox %s in %s", bbox, frame_name)
                 continue
             x1, y1, x2, y2 = _sanitize_bbox(bbox)
+            assert x1 < x2, f"x1 >= x2 in {frame_name}: {bbox}"
+            assert y1 < y2, f"y1 >= y2 in {frame_name}: {bbox}"
             draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
         out_path = output_dir / frame_name
         img.save(out_path)
         LOGGER.debug("Wrote %s", out_path)
 
 
-
 def main(argv: Iterable[str] | None = None) -> None:
     """CLI entrypoint."""
     args = parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
+    )
     try:
-        draw_rois(args.frames_dir, args.detections_json, args.output_dir, args.color)
+        draw_rois(
+            args.frames_dir, args.detections_json, args.output_dir, args.color
+        )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Failed to draw ROIs: %s", exc)
         raise SystemExit(1) from exc
