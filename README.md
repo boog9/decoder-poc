@@ -80,15 +80,18 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 
 ## Object Detection CLI
 
-Run YOLOX object detection on extracted frames. Only ``person`` detections are
-saved to a JSON file.
+Run YOLOX object detection on extracted frames. By default only ``person``
+detections are saved. Use ``--classes`` to specify additional COCO class IDs.
 
 ```bash
 python -m src.detect_objects \
     --frames-dir frames/ \
     --output-json detections.json \
     --model yolox-s \
-    --img-size 640
+    --img-size 640 \
+    --conf-thres 0.30 \
+    --nms-thres 0.45 \
+    --classes 0 32
 ```
 
 To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
