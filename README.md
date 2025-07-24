@@ -69,10 +69,10 @@ that ``python`` and ``pip`` come from the same environment:
 python -m pip install -U -r requirements.txt
 ```
 
-The YOLOX models loaded via ``torch.hub`` also require the ``loguru`` package
-and OpenCV. Both ``loguru`` and ``opencv-python-headless`` are included in
-``requirements.txt``. Install them or add the packages separately when running
-the detection CLI.
+The YOLOX models loaded via ``torch.hub`` also require the ``loguru`` package,
+OpenCV, and ``tabulate``. These dependencies are included in
+``requirements.txt`` (``loguru``, ``opencv-python-headless``, ``tabulate``). If
+installing individually, add these packages before running the detection CLI.
 
 Alternatively, build the Docker image which installs everything via `make build`.
 The Pillow and NumPy packages used by ``frame_enhancer.py`` come from

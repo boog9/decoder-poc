@@ -7,3 +7,4 @@ pillow>=10.3
 numpy>=1.26
 loguru>=0.7
 opencv-python-headless>=4.10
+tabulate>=0.9
