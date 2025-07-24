@@ -138,66 +138,21 @@ def _preprocess_image(
     return tensor, ratio, pad_x, pad_y, w0, h0
 
 
-def _iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
-    """Compute Intersection over Union for two boxes."""
-
-    ax1, ay1, ax2, ay2 = box_a
-    bx1, by1, bx2, by2 = box_b
-    inter_x1 = max(ax1, bx1)
-    inter_y1 = max(ay1, by1)
-    inter_x2 = min(ax2, bx2)
-    inter_y2 = min(ay2, by2)
-    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
-        return 0.0
-    inter = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
-    area_a = (ax2 - ax1) * (ay2 - ay1)
-    area_b = (bx2 - bx1) * (by2 - by1)
-    union = area_a + area_b - inter
-    return inter / union
-
-
-def _nms(boxes: List[Sequence[float]], scores: List[float], thr: float) -> List[int]:
-    """Pure Python NMS returning kept indices sorted by score."""
-
-    order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-    keep: List[int] = []
-    while order:
-        i = order.pop(0)
-        keep.append(i)
-        order = [
-            j for j in order if _iou(boxes[i], boxes[j]) <= thr
-        ]
-    return keep
-
-
 def _filter_detections(
     outputs: Sequence[Sequence[float]],
     conf_thr: float,
-    nms_thr: float,
 ) -> List[Tuple[List[float], float, int]]:
-    """Filter raw detections by confidence and NMS for class ``person``."""
+    """Filter YOLOX detections for person, racket and ball classes."""
 
-    boxes: List[List[float]] = []
-    scores: List[float] = []
-    cls_ids: List[int] = []
-    for det in outputs:
-        cls = int(det[5])
-        if cls != 0:
-            continue
-        score = float(det[4])
-        if score < conf_thr:
-            continue
-        boxes.append([float(det[0]), float(det[1]), float(det[2]), float(det[3])])
-        scores.append(score)
-        cls_ids.append(cls)
-
-    if not boxes:
-        return []
-
-    keep = _nms(boxes, scores, nms_thr)
+    keep_ids = {0, 29, 32}
     return [
-        (boxes[i], scores[i], cls_ids[i])
-        for i in keep
+        (
+            [float(det[0]), float(det[1]), float(det[2]), float(det[3])],
+            float(det[4]),
+            int(det[5]),
+        )
+        for det in outputs
+        if int(det[5]) in keep_ids and float(det[4]) >= conf_thr
     ]
 
 
@@ -213,7 +168,7 @@ def detect_folder(
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
-    Only detections of the ``person`` class are kept.
+    Only detections of the ``person``, ``racket`` and ``ball`` classes are kept.
 
     Args:
         frames_dir: Directory containing frame images.
@@ -242,33 +197,24 @@ def detect_folder(
             tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
+            outputs = model.head.decode_outputs(outputs, (img_size, img_size))
+            from yolox.utils import postprocess
 
-            # Optional YOLOX decoding and post-processing
-            try:
-                if hasattr(model, "head") and hasattr(model.head, "decode_outputs"):
-                    outputs = model.head.decode_outputs(outputs, (img_size, img_size))
-                from yolox.utils import postprocess as _yolox_post
-            except Exception:  # pragma: no cover - YOLOX not installed in tests
-                _yolox_post = None
-
-            if _yolox_post is not None:
-                processed = _yolox_post(
-                    outputs,
-                    num_classes=80,
-                    conf_thre=conf_thres,
-                    nms_thre=nms_thres,
-                    class_agnostic=False,
-                )
-                if processed:
-                    det = processed[0]
-                    outputs_list = [det.tolist()] if hasattr(det, "tolist") else [det]
-                else:
-                    outputs_list = []
+            processed = postprocess(
+                outputs,
+                num_classes=80,
+                conf_thre=conf_thres,
+                nms_thre=nms_thres,
+                class_agnostic=False,
+            )
+            if processed:
+                det = processed[0]
+                outputs_list = det.cpu().tolist() if torch.is_tensor(det) else det
             else:
-                outputs_list = outputs.tolist() if hasattr(outputs, "tolist") else outputs
+                outputs_list = []
 
             detections = []
-            for bbox, score, cls in _filter_detections(outputs_list, conf_thres, nms_thres):
+            for bbox, score, cls in _filter_detections(outputs_list, conf_thres):
                 x0 = max((bbox[0] - pad_x) / ratio, 0.0)
                 y0 = max((bbox[1] - pad_y) / ratio, 0.0)
                 x1 = min((bbox[2] - pad_x) / ratio, w0)
