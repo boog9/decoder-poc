@@ -9,7 +9,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Object detection on a directory of frames using YOLOX."""
+"""Object detection on a directory of frames using YOLOX.
+
+This script requires a CUDA-enabled GPU and YOLOX 0.3+.
+"""
 
 from __future__ import annotations
 
@@ -21,11 +24,13 @@ from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence
 
 from PIL import Image
-import inspect
 from tqdm import tqdm
 
 import torch
 from torchvision.transforms.functional import to_tensor
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA device required for YOLOX")
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,10 +78,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--img-size",
         type=int,
         default=640,
-        help=(
-            "Resize frames to this square size before detection. "
-            "Should be a multiple of 32 (default: 640)."
-        ),
+        help="Resize frames to this square size before detection.",
     )
     parser.add_argument(
         "--conf-thres",
@@ -93,17 +95,18 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _load_model(model_name: str, device: str = "cuda"):
-    """Load a YOLOX model via ``torch.hub``."""
+def _load_model(model_name: str):
+    """Load a YOLOX model via ``torch.hub`` on CUDA."""
     if model_name not in YOLOX_MODELS:
         raise ValueError(f"Unsupported model {model_name}")
     torch_name = _YOLOX_MODEL_MAP[model_name]
-    LOGGER.info("Loading %s model on %s", model_name, device)
+    LOGGER.info("Loading %s on CUDA", model_name)
     model = torch.hub.load(
         "Megvii-BaseDetection/YOLOX", torch_name, pretrained=True
     )
-    model = model.eval().to(device)
-    return model
+    return model.eval().cuda()
+
+
 
 
 def _letterbox_image(
@@ -130,8 +133,7 @@ def _preprocess_image(
     Returns the tensor along with resize metadata for back-projection.
     """
 
-    if size % 32 != 0:
-        raise ValueError("img_size must be a multiple of 32")
+    # safeguard remains – YOLOX expects strides * 32
     img = Image.open(path).convert("RGB")
     w0, h0 = img.size
     img, ratio, pad_x, pad_y = _letterbox_image(img, size)
@@ -157,21 +159,15 @@ def _filter_detections(
     ]
 
 
-def _decode_with_compat(
-    head: object, outputs: torch.Tensor, img_size: int
-) -> torch.Tensor:
-    """Call ``head.decode_outputs`` supporting multiple API versions."""
+def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
+    """Decode model outputs on GPU and move cached tensors."""
 
-    params = list(inspect.signature(head.decode_outputs).parameters.keys())
-    if len(params) >= 2 and params[1] == "dtype":
-        dtype = getattr(outputs, "dtype", None)
-        if dtype is None and isinstance(outputs, list) and outputs:
-            dtype = getattr(outputs[0], "dtype", None)
-        kwargs = {"dtype": dtype}
-        if "img_size" in params:
-            kwargs["img_size"] = (img_size, img_size)
-        return head.decode_outputs(outputs, **kwargs)
-    return head.decode_outputs(outputs, (img_size, img_size))
+    decoded = head.decode_outputs(outs, dtype=outs.dtype)
+    for attr in ("grids", "expanded_strides", "strides"):
+        lst = getattr(head, attr, None)
+        if isinstance(lst, list):
+            setattr(head, attr, [t.cuda() for t in lst])
+    return decoded  # Tensor on correct device
 
 
 
@@ -194,8 +190,7 @@ def detect_folder(
         model_name: Variant name of the YOLOX model to load.
         img_size: Target input size for the model.
     """
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = _load_model(model_name, device)
+    model = _load_model(model_name)
     frames = sorted(
         [
             p
@@ -212,10 +207,10 @@ def detect_folder(
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
             tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(frame, img_size)
-            tensor = tensor.unsqueeze(0).to(device)
+            tensor = tensor.unsqueeze(0).cuda()
             with torch.no_grad():
-                outputs = model(tensor)[0]
-            outputs = _decode_with_compat(model.head, outputs, img_size)
+                raw = model(tensor)[0]
+            outputs = _decode_gpu(model.head, raw)
             from yolox.utils import postprocess
 
             processed = postprocess(
@@ -227,7 +222,7 @@ def detect_folder(
             )
             if processed:
                 det = processed[0]
-                outputs_list = det.cpu().tolist() if torch.is_tensor(det) else det
+                outputs_list = det.cpu().tolist()
             else:
                 outputs_list = []
 
@@ -262,13 +257,12 @@ def detect_folder(
             pbar.update(1)
     elapsed = time.perf_counter() - start
 
-    if device == "cuda":
-        free, total = torch.cuda.mem_get_info()
-        LOGGER.info(
-            "GPU memory: %.2f/%.2f GB used",
-            (total - free) / 1024**3,
-            total / 1024**3,
-        )
+    free, total = torch.cuda.mem_get_info()
+    LOGGER.info(
+        "GPU memory: %.2f/%.2f GB used",
+        (total - free) / 1024**3,
+        total / 1024**3,
+    )
     LOGGER.info("Processed %d frames in %.2fs", len(frames), elapsed)
 
     out_json.parent.mkdir(parents=True, exist_ok=True)

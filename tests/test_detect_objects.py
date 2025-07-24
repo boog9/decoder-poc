@@ -18,39 +18,12 @@ import json
 from pathlib import Path
 import sys
 import types
+import pytest
+
+pytest.importorskip("PIL")
+pytest.importorskip("torch.cuda")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-torch_stub = types.ModuleType("torch")
-torch_stub.cuda = types.SimpleNamespace(
-    is_available=lambda: False, mem_get_info=lambda: (0, 0)
-)
-torch_stub.hub = types.SimpleNamespace(load=lambda *a, **k: None)
-torch_stub.is_tensor = lambda x: hasattr(x, "cpu")
-
-
-class _NoGrad:
-    def __enter__(self):
-        return None
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-
-torch_stub.no_grad = lambda: _NoGrad()
-sys.modules.setdefault("torch", torch_stub)
-
-tv_stub = types.ModuleType("torchvision")
-tv_transforms = types.ModuleType("torchvision.transforms")
-tv_transforms.functional = types.SimpleNamespace(to_tensor=lambda x: x)
-tv_stub.transforms = tv_transforms
-sys.modules.setdefault("torchvision", tv_stub)
-sys.modules.setdefault("torchvision.transforms", tv_transforms)
-sys.modules.setdefault(
-    "torchvision.transforms.functional", tv_transforms.functional
-)
-
-sys.modules.setdefault("PIL", types.ModuleType("PIL")).Image = object()
 
 
 class _DummyTqdm:
@@ -97,21 +70,49 @@ def test_load_model_translates_hyphen(monkeypatch) -> None:
         recorded["name"] = name
 
         class Dummy:
+            head = object()
+
             def eval(self):
                 return self
 
-            def to(self, device):
-                recorded["device"] = device
+            def cuda(self):
+                recorded["cuda"] = True
                 return self
 
         return Dummy()
 
     monkeypatch.setattr(dobj.torch.hub, "load", fake_load)
-    dobj._load_model("yolox-s", device="cpu")
+    dobj._load_model("yolox-s")
 
     assert recorded["name"] == "yolox_s"
     assert recorded["repo"] == "Megvii-BaseDetection/YOLOX"
-    assert recorded["device"] == "cpu"
+    assert recorded.get("cuda")
+
+
+def test_decode_gpu_moves_buffers() -> None:
+    class DummyTensor:
+        def __init__(self, device: str = "cpu") -> None:
+            self.device = device
+            self.dtype = "float32"
+
+        def cuda(self):
+            self.device = "cuda"
+            return self
+
+    class DummyHead:
+        def decode_outputs(self, out, dtype):
+            self.grids = [DummyTensor()]
+            self.expanded_strides = [DummyTensor()]
+            return [out]
+
+    head = DummyHead()
+    out = DummyTensor()
+
+    decoded = dobj._decode_gpu(head, out)
+
+    assert decoded == [out]
+    assert head.grids[0].device == "cuda"
+    assert head.expanded_strides[0].device == "cuda"
 
 
 def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
@@ -140,7 +141,7 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
             return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]]
 
         head = types.SimpleNamespace(
-            decode_outputs=lambda out, size: out
+            decode_outputs=lambda out, dtype: out
         )
 
     monkeypatch.setattr(dobj, "_load_model", lambda *a, **k: FakeModel())
@@ -160,7 +161,7 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
         def unsqueeze(self, dim):
             return self
 
-        def to(self, device):
+        def cuda(self):
             return self
 
     monkeypatch.setattr(
@@ -183,6 +184,8 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     sys.modules.pop("yolox", None)
 
 
+
+
 def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
     frames = tmp_path / "frames"
     frames.mkdir()
@@ -200,7 +203,7 @@ def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
         def __init__(self) -> None:
             self.called = False
 
-        def decode_outputs(self, out, size):
+        def decode_outputs(self, out, dtype):
             self.called = True
             return out
 
@@ -230,7 +233,7 @@ def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
         def unsqueeze(self, dim):
             return self
 
-        def to(self, device):
+        def cuda(self):
             return self
 
     monkeypatch.setattr(
@@ -266,7 +269,7 @@ def test_detect_folder_single_frame(monkeypatch, tmp_path: Path) -> None:
             return self
 
     class FakeModel:
-        head = types.SimpleNamespace(decode_outputs=lambda o, s: o)
+        head = types.SimpleNamespace(decode_outputs=lambda o, dtype: o)
 
         def __call__(self, tensor):
             return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]]
@@ -286,7 +289,7 @@ def test_detect_folder_single_frame(monkeypatch, tmp_path: Path) -> None:
         def unsqueeze(self, dim):
             return self
 
-        def to(self, device):
+        def cuda(self):
             return self
 
     monkeypatch.setattr(
@@ -308,70 +311,8 @@ def test_detect_folder_single_frame(monkeypatch, tmp_path: Path) -> None:
     sys.modules.pop("yolox", None)
 
 
-def test_detect_folder_new_decode_signature(monkeypatch, tmp_path: Path) -> None:
-    """Ensure detection works with new ``decode_outputs`` signature."""
+@pytest.mark.parametrize("rows", [[[0, 0, 1, 1, 0.9, 0]]])
+def test_filter_cpu(rows) -> None:
+    assert dobj._filter_detections(rows, 0.5)
 
-    frames = tmp_path / "frames"
-    frames.mkdir()
-    (frames / "img.jpg").write_bytes(b"\x00")
 
-    class FakeDet(list):
-        dtype = "float32"
-
-        def tolist(self):
-            return [list(self)]
-
-        def cpu(self):
-            return self
-
-    class FakeHead:
-        def __init__(self) -> None:
-            self.called = False
-
-        def decode_outputs(self, out, dtype, img_size):
-            self.called = True
-            return out
-
-    head = FakeHead()
-
-    class FakeModel:
-        def __init__(self) -> None:
-            self.head = head
-
-        def __call__(self, tensor):
-            return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]]
-
-    monkeypatch.setattr(dobj, "_load_model", lambda *a, **k: FakeModel())
-
-    module = types.ModuleType("yolox")
-    utils_mod = types.ModuleType("utils")
-    utils_mod.postprocess = (
-        lambda outputs, num_classes, conf_thre, nms_thre, class_agnostic=False: [FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]
-    )
-    module.utils = utils_mod
-    sys.modules["yolox"] = module
-    sys.modules["yolox.utils"] = utils_mod
-
-    class DummyTensor:
-        def unsqueeze(self, dim):
-            return self
-
-        def to(self, device):
-            return self
-
-    monkeypatch.setattr(
-        dobj,
-        "_preprocess_image",
-        lambda p, s: (DummyTensor(), 1.0, 0, 0, 10, 10),
-    )
-
-    out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s", 640)
-
-    assert head.called
-    with out_json.open() as fh:
-        data = json.load(fh)
-    assert data[0]["detections"]
-
-    sys.modules.pop("yolox.utils", None)
-    sys.modules.pop("yolox", None)

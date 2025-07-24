@@ -81,7 +81,7 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 ## Object Detection CLI
 
 Run YOLOX object detection on extracted frames. Only ``person`` detections are
-saved.
+saved. This command requires a CUDA-enabled GPU and YOLOX 0.3+.
 
 ```bash
 python -m src.detect_objects \
