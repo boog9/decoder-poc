@@ -160,25 +160,32 @@ def _filter_detections(
 
 
 def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
-    """Decode model outputs on the same device as ``outs``.
+    """Decode YOLOX outputs ensuring cached tensors reside on the GPU.
 
-    YOLOX caches several tensors on the detection head (e.g. grids). If these
-    tensors remain on the CPU while the model outputs are on the GPU, a device
-    mismatch error is raised when ``decode_outputs`` is called. This helper
-    ensures all cached tensors are moved to ``outs.device`` before decoding. To
-    avoid unnecessary copies, caches are moved only once per head.
+    YOLOX caches several tensors on the detection head (``grids`` and
+    ``expanded_strides``). On the first call these buffers are allocated on the
+    CPU, which leads to a device mismatch if ``outs`` is on CUDA.  This function
+    performs an initial decode on the CPU to populate the caches and then moves
+    them to the GPU. Subsequent calls run directly on CUDA without extra copies.
     """
 
-    if outs.device.type == "cuda" and not getattr(head, "_buffers_on_gpu", False):
+    if not getattr(head, "_buffers_synced", False):
+        # First call: decode on CPU so the internal buffers are created there
+        outs_cpu = outs.cpu()
+        decoded = head.decode_outputs(outs_cpu, dtype=outs_cpu.dtype)
+
+        # Move cached buffers to GPU for future calls
         for name in ("grids", "expanded_strides", "strides"):
             buf = getattr(head, name, None)
             if isinstance(buf, list):
                 for i, t in enumerate(buf):
                     if torch.is_tensor(t):
-                        buf[i] = t.to(outs.device)
+                        buf[i] = t.cuda()
             elif torch.is_tensor(buf):
-                setattr(head, name, buf.to(outs.device))
-        head._buffers_on_gpu = True
+                setattr(head, name, buf.cuda())
+
+        head._buffers_synced = True
+        return decoded.cuda()
 
     return head.decode_outputs(outs, dtype=outs.dtype)
 
