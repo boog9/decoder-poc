@@ -105,4 +105,5 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
 ```
 
 This image installs YOLOX and its dependencies, including ``cmake`` for
-building the model from source.
+building the model from source. The package is installed directly from the
+YOLOX GitHub repository to avoid issues with the PyPI release.
