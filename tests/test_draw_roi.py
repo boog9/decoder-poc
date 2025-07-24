@@ -94,3 +94,19 @@ def test_draw_rois_writes_files(tmp_path: Path) -> None:
 
     out_img = out_dir / "img1.jpg"
     assert out_img.exists(), "Annotated image was not created"
+
+
+def test_draw_rois_sanitizes_bbox(tmp_path: Path) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    img_path = frames / "img1.jpg"
+    Image.new("RGB", (10, 10)).save(img_path)
+    det_json = tmp_path / "det.json"
+    det_json.write_text('[{"frame": "img1.jpg", "detections": [{"bbox": [5, 5, 1, 1]}]}]')
+
+    out_dir = tmp_path / "out"
+    # Should not raise even though bbox coordinates are reversed
+    dr.draw_rois(frames, det_json, out_dir)
+
+    out_img = out_dir / "img1.jpg"
+    assert out_img.exists(), "Annotated image was not created"
