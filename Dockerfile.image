@@ -1,0 +1,18 @@
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        cmake \
+        git \
+        build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    pip3 install --no-cache-dir git+https://github.com/Megvii-BaseDetection/YOLOX.git
+
+WORKDIR /app
+COPY . /app
+
+ENTRYPOINT ["python", "-m", "src.detect_image"]
