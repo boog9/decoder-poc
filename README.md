@@ -105,6 +105,7 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --model yolox-s
 ```
 
-This image installs YOLOX and its dependencies, including ``cmake`` for
-building the model from source. The package is installed directly from the
-YOLOX GitHub repository to avoid issues with the PyPI release.
+This image installs YOLOX and its dependencies using the official
+``pytorch/pytorch`` CUDA runtime as the base image, which already includes
+PyTorch with GPU support. The YOLOX package is installed directly from the
+GitHub repository to avoid issues with the PyPI release.
