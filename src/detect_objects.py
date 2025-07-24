@@ -160,14 +160,16 @@ def _filter_detections(
 
 
 def _decode_gpu(head: object, outs: torch.Tensor) -> torch.Tensor:
-    """Decode model outputs on GPU and move cached tensors."""
+    """Decode model outputs on CUDA and move cached buffers."""
 
-    decoded = head.decode_outputs(outs, dtype=outs.dtype)
     for attr in ("grids", "expanded_strides", "strides"):
-        lst = getattr(head, attr, None)
-        if isinstance(lst, list):
-            setattr(head, attr, [t.cuda() for t in lst])
-    return decoded  # Tensor on correct device
+        buf = getattr(head, attr, None)
+        if isinstance(buf, list):
+            setattr(head, attr, [t.cuda() for t in buf])
+        elif hasattr(buf, "cuda"):
+            setattr(head, attr, buf.cuda())
+
+    return head.decode_outputs(outs, dtype=outs.dtype)
 
 
 
