@@ -89,13 +89,6 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=0.45,
         help="IoU threshold for non-max suppression (default: 0.45)",
     )
-    parser.add_argument(
-        "--classes",
-        type=int,
-        nargs="*",
-        default=[0],
-        help="COCO class IDs to keep (default: 0 - person)",
-    )
     return parser.parse_args(argv)
 
 
@@ -179,18 +172,17 @@ def _nms(boxes: List[Sequence[float]], scores: List[float], thr: float) -> List[
 
 def _filter_detections(
     outputs: Sequence[Sequence[float]],
-    classes: Sequence[int],
     conf_thr: float,
     nms_thr: float,
 ) -> List[Tuple[List[float], float, int]]:
-    """Filter raw detections by class, confidence and NMS."""
+    """Filter raw detections by confidence and NMS for class ``person``."""
 
     boxes: List[List[float]] = []
     scores: List[float] = []
     cls_ids: List[int] = []
     for det in outputs:
         cls = int(det[5])
-        if classes and cls not in classes:
+        if cls != 0:
             continue
         score = float(det[4])
         if score < conf_thr:
@@ -218,9 +210,10 @@ def detect_folder(
     img_size: int,
     conf_thres: float = 0.3,
     nms_thres: float = 0.45,
-    classes: Sequence[int] | None = None,
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
+
+    Only detections of the ``person`` class are kept.
 
     Args:
         frames_dir: Directory containing frame images.
@@ -254,7 +247,7 @@ def detect_folder(
             else:
                 outputs_list = outputs
             detections = []
-            for bbox, score, cls in _filter_detections(outputs_list, classes or [], conf_thres, nms_thres):
+            for bbox, score, cls in _filter_detections(outputs_list, conf_thres, nms_thres):
                 x0 = max((bbox[0] - pad_x) / ratio, 0.0)
                 y0 = max((bbox[1] - pad_y) / ratio, 0.0)
                 x1 = min((bbox[2] - pad_x) / ratio, w0)
@@ -312,7 +305,6 @@ def main(argv: Iterable[str] | None = None) -> None:
             args.img_size,
             args.conf_thres,
             args.nms_thres,
-            args.classes,
         )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.exception("Detection failed")
