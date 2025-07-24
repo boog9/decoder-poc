@@ -208,11 +208,9 @@ def detect_folder(
                 nms_thre=nms_thres,
                 class_agnostic=False,
             )
-            if processed:
-                det = processed[0]
-                outputs_list = det.cpu().tolist()
-            else:
-                outputs_list = []
+
+            det = processed[0] if processed and processed[0] is not None else None
+            outputs_list = det.cpu().tolist() if det is not None else []
 
             detections = []
             for bbox, score, cls in _filter_detections(outputs_list, conf_thres):
