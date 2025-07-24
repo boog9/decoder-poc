@@ -191,6 +191,13 @@ def detect_folder(
             tensor = tensor.unsqueeze(0).cuda()
             with torch.no_grad():
                 raw = model(tensor)[0]
+
+            # Align output tensor with expected (B, N, 85) shape.
+            if isinstance(raw, list):
+                raw = model.head.decode_outputs(raw, dtype=raw[0].dtype)
+            elif raw.dim() == 2:
+                raw = raw.unsqueeze(0)
+
             outputs = raw
             from yolox.utils import postprocess
 
