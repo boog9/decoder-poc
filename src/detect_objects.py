@@ -30,6 +30,14 @@ LOGGER = logging.getLogger(__name__)
 
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
+# Map CLI model names to torch.hub callable names.
+_YOLOX_MODEL_MAP = {
+    "yolox-s": "yolox_s",
+    "yolox-m": "yolox_m",
+    "yolox-l": "yolox_l",
+    "yolox-x": "yolox_x",
+}
+
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
@@ -57,9 +65,10 @@ def _load_model(model_name: str, device: str = "cuda"):
     """Load a YOLOX model via ``torch.hub``."""
     if model_name not in YOLOX_MODELS:
         raise ValueError(f"Unsupported model {model_name}")
+    torch_name = _YOLOX_MODEL_MAP[model_name]
     LOGGER.info("Loading %s model on %s", model_name, device)
     model = torch.hub.load(
-        "Megvii-BaseDetection/YOLOX", model_name, pretrained=True
+        "Megvii-BaseDetection/YOLOX", torch_name, pretrained=True
     )
     model = model.eval().to(device)
     return model

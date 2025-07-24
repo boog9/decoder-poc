@@ -77,6 +77,31 @@ def test_parse_args_defaults() -> None:
     assert args.model == "yolox-s"
 
 
+def test_load_model_translates_hyphen(monkeypatch) -> None:
+    recorded = {}
+
+    def fake_load(repo, name, pretrained=True):
+        recorded["repo"] = repo
+        recorded["name"] = name
+
+        class Dummy:
+            def eval(self):
+                return self
+
+            def to(self, device):
+                recorded["device"] = device
+                return self
+
+        return Dummy()
+
+    monkeypatch.setattr(dobj.torch.hub, "load", fake_load)
+    dobj._load_model("yolox-s", device="cpu")
+
+    assert recorded["name"] == "yolox_s"
+    assert recorded["repo"] == "Megvii-BaseDetection/YOLOX"
+    assert recorded["device"] == "cpu"
+
+
 def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     frames = tmp_path / "frames"
     frames.mkdir()
