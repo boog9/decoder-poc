@@ -72,3 +72,18 @@ python -m pip install -U -r requirements.txt
 Alternatively, build the Docker image which installs everything via `make build`.
 The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 ``requirements.txt``.
+
+## Object Detection CLI
+
+Run YOLOX object detection on extracted frames. Only ``person`` detections are
+saved to a JSON file.
+
+```bash
+python -m src.detect_objects \
+    --frames-dir frames/ \
+    --output-json detections.json \
+    --model yolox-s
+```
+
+See ``Dockerfile.detect`` for a GPU-enabled image containing the required
+dependencies.
