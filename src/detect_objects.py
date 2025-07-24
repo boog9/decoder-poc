@@ -155,59 +155,6 @@ def _filter_detections(
     ]
 
 
-def _clone_to_cpu(t: torch.Tensor) -> torch.Tensor:
-    """Return a detached clone of ``t`` on the CPU."""
-
-    return t.detach().cpu().clone()
-
-
-def _clone_pyramid(outs: list[torch.Tensor], device: str) -> list[torch.Tensor]:
-    """Deeply clone pyramid outputs and ensure batch dimension."""
-
-    clones: list[torch.Tensor] = []
-    for t in outs:
-        t = t.detach().clone().to(device)
-        if t.dim() == 3:
-            t = t.unsqueeze(0)
-        clones.append(t)
-    return clones
-
-
-def _normalize_outputs(outs: list[torch.Tensor]) -> list[torch.Tensor]:
-    """Normalize model outputs without altering expected dimensions."""
-
-    # Older versions of YOLOX returned a batch dimension of one which must
-    # remain for :func:`yolo_head.decode_outputs`.  Only squeeze tensors that
-    # have an explicit singleton batch and four dimensions.
-    return [
-        t.squeeze(0) if t.dim() == 4 and t.size(0) == 1 else t
-        for t in outs
-    ]
-
-
-def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
-    """Decode YOLOX outputs in CUDA with one-time buffer sync."""
-
-    lst = isinstance(outs, list)
-    device = (outs[0] if lst else outs).device
-    dtype = (outs[0] if lst else outs).dtype
-
-    if device.type == "cuda" and not getattr(head, "_buf_sync", False):
-        cpu_copy = _clone_pyramid(outs if lst else [outs], "cpu")
-        head.decode_outputs(cpu_copy, dtype=dtype)
-
-        for name in ("grids", "expanded_strides", "strides"):
-            buf = getattr(head, name, None)
-            if isinstance(buf, list):
-                for i, t in enumerate(buf):
-                    if torch.is_tensor(t):
-                        buf[i] = t.cuda()
-            elif torch.is_tensor(buf):
-                setattr(head, name, buf.cuda())
-        head._buf_sync = True
-
-    outs_gpu = _clone_pyramid(outs if lst else [outs], device)
-    return head.decode_outputs(outs_gpu, dtype=dtype)
 
 
 def detect_folder(
@@ -244,7 +191,7 @@ def detect_folder(
             tensor = tensor.unsqueeze(0).cuda()
             with torch.no_grad():
                 raw = model(tensor)[0]
-            outputs = _decode_gpu(model.head, raw)
+            outputs = raw
             from yolox.utils import postprocess
 
             processed = postprocess(

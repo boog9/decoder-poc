@@ -89,69 +89,6 @@ def test_load_model_translates_hyphen(monkeypatch) -> None:
     assert recorded.get("cuda")
 
 
-def test_decode_gpu_moves_buffers() -> None:
-    class DummyTensor:
-        def __init__(self, device: str = "cpu") -> None:
-            self.device = device
-            self.dtype = "float32"
-
-        def cpu(self):
-            self.device = "cpu"
-            return self
-
-        def cuda(self):
-            self.device = "cuda"
-            return self
-
-    class DummyHead:
-        def decode_outputs(self, out, dtype):
-            self.grids = [DummyTensor()]
-            self.expanded_strides = [DummyTensor()]
-            return [out]
-
-    head = DummyHead()
-    out = DummyTensor()
-
-    decoded = dobj._decode_gpu(head, out)
-
-    assert isinstance(decoded, list) and decoded[0].device == "cuda"
-    assert head.grids[0].device == "cuda"
-    assert head.expanded_strides[0].device == "cuda"
-    assert getattr(head, "_buf_sync", False)
-    assert out.device == "cuda"
-
-
-def test_decode_gpu_handles_list_outputs() -> None:
-    class DummyTensor:
-        def __init__(self, device: str = "cuda") -> None:
-            self.device = device
-            self.dtype = "float32"
-
-        def cpu(self):
-            self.device = "cpu"
-            return self
-
-        def cuda(self):
-            self.device = "cuda"
-            return self
-
-    class DummyHead:
-        def decode_outputs(self, out, dtype):
-            self.received = [t.device for t in out]
-            self.grids = [DummyTensor()]
-            self.expanded_strides = [DummyTensor()]
-            return DummyTensor()
-
-    head = DummyHead()
-    outs = [DummyTensor(), DummyTensor(), DummyTensor()]
-
-    decoded = dobj._decode_gpu(head, outs)
-
-    assert isinstance(decoded, DummyTensor)
-    assert head.received == ["cuda", "cuda", "cuda"]
-    assert head.grids[0].device == "cuda"
-    assert head.expanded_strides[0].device == "cuda"
-    assert getattr(head, "_buf_sync", False)
 
 
 def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
@@ -284,7 +221,7 @@ def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
     out_json = tmp_path / "det.json"
     dobj.detect_folder(frames, out_json, "yolox-s", 640)
 
-    assert head.called
+    assert not head.called
     with out_json.open() as fh:
         data = json.load(fh)
     assert data and data[0]["detections"]
