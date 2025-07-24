@@ -101,12 +101,8 @@ def _load_model(model_name: str):
         raise ValueError(f"Unsupported model {model_name}")
     torch_name = _YOLOX_MODEL_MAP[model_name]
     LOGGER.info("Loading %s on CUDA", model_name)
-    model = torch.hub.load(
-        "Megvii-BaseDetection/YOLOX", torch_name, pretrained=True
-    )
+    model = torch.hub.load("Megvii-BaseDetection/YOLOX", torch_name, pretrained=True)
     return model.eval().cuda()
-
-
 
 
 def _letterbox_image(
@@ -165,26 +161,32 @@ def _clone_to_cpu(t: torch.Tensor) -> torch.Tensor:
     return t.detach().cpu().clone()
 
 
+def _normalize_outputs(outs: list[torch.Tensor]) -> list[torch.Tensor]:
+    """Ensure all tensors have shape ``[C, H, W]`` by stripping batch dim."""
+
+    return [t.squeeze(0) if t.dim() == 4 and t.size(0) == 1 else t for t in outs]
+
+
 def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.Tensor:
-    """Decode YOLOX outputs with caching on the GPU.
+    """Decode YOLOX outputs in CUDA with one-time buffer sync."""
 
-    The first invocation performs a warm-up decode on the CPU using a deep copy
-    of ``outs`` so that internal buffers (``grids`` and ``expanded_strides``)
-    are allocated. These buffers are then transferred to CUDA. Subsequent calls
-    decode directly on the GPU without additional copies.
-    """
-
-    device = outs[0].device if isinstance(outs, list) else outs.device
+    # ``outs`` may come as a single tensor or a list of tensors.
+    if isinstance(outs, list):
+        outs_norm = _normalize_outputs(outs)
+        device = outs_norm[0].device
+        dtype = outs_norm[0].dtype
+    else:
+        outs_norm = outs
+        device = outs_norm.device
+        dtype = outs_norm.dtype
 
     if device.type == "cuda" and not getattr(head, "_buffers_synced", False):
-        if isinstance(outs, list):
-            outs_cpu = [t.detach().cpu().clone() for t in outs]
-            dtype = outs_cpu[0].dtype
+        if isinstance(outs_norm, list):
+            cpu_copy = [t.detach().cpu().clone() for t in outs_norm]
         else:
-            outs_cpu = outs.detach().cpu().clone()
-            dtype = outs_cpu.dtype
+            cpu_copy = outs_norm.detach().cpu().clone()
 
-        head.decode_outputs(outs_cpu, dtype=dtype)
+        head.decode_outputs(cpu_copy, dtype=dtype)
 
         for name in ("grids", "expanded_strides", "strides"):
             buf = getattr(head, name, None)
@@ -197,11 +199,8 @@ def _decode_gpu(head: object, outs: torch.Tensor | list[torch.Tensor]) -> torch.
 
         head._buffers_synced = True
 
-    outs_gpu = list(outs) if isinstance(outs, list) else outs
-    dtype = outs_gpu[0].dtype if isinstance(outs_gpu, list) else outs_gpu.dtype
-    return head.decode_outputs(outs_gpu, dtype=dtype)
-
-
+    outs_for_decode = list(outs_norm) if isinstance(outs_norm, list) else outs_norm
+    return head.decode_outputs(outs_for_decode, dtype=dtype)
 
 
 def detect_folder(
@@ -224,11 +223,7 @@ def detect_folder(
     """
     model = _load_model(model_name)
     frames = sorted(
-        [
-            p
-            for p in frames_dir.iterdir()
-            if p.suffix.lower() in {".jpg", ".png"}
-        ]
+        [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
     if not frames:
         LOGGER.warning("No frames found in %s", frames_dir)
