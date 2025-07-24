@@ -21,6 +21,11 @@ import types
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 torch_stub = types.ModuleType("torch")
+
+class _DummyBatch(list):
+    def to(self, device):
+        return self
+
 torch_stub.cuda = types.SimpleNamespace(
     is_available=lambda: False, mem_get_info=lambda: (0, 0)
 )
@@ -34,6 +39,7 @@ class _NoGrad:
         return False
 
 torch_stub.no_grad = lambda: _NoGrad()
+torch_stub.cat = lambda tensors, dim=0: _DummyBatch(tensors)
 sys.modules.setdefault("torch", torch_stub)
 
 tv_stub = types.ModuleType("torchvision")
@@ -75,6 +81,7 @@ def test_parse_args_defaults() -> None:
     ])
     assert isinstance(args, argparse.Namespace)
     assert args.model == "yolox-s"
+    assert args.batch_size == 1
 
 
 def test_load_model_translates_hyphen(monkeypatch) -> None:
@@ -120,7 +127,8 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
 
     class FakeModel:
         def __call__(self, tensor):
-            return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]]
+            batch_size = len(tensor)
+            return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])] for _ in range(batch_size)]
 
     monkeypatch.setattr(dobj, "_load_model", lambda *a, **k: FakeModel())
 
@@ -134,7 +142,7 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(dobj, "_preprocess_image", lambda p: DummyTensor())
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s")
+    dobj.detect_folder(frames, out_json, "yolox-s", batch_size=2)
 
     with out_json.open() as fh:
         data = json.load(fh)

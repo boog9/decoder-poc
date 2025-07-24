@@ -58,6 +58,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         choices=sorted(YOLOX_MODELS),
         help="YOLOX model variant",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Number of frames to process per batch (default: 1)",
+    )
     return parser.parse_args(argv)
 
 
@@ -97,8 +103,20 @@ def _filter_person_detections(
     return results
 
 
-def detect_folder(frames_dir: Path, out_json: Path, model_name: str) -> None:
-    """Run detection over ``frames_dir`` and write results."""
+def detect_folder(
+    frames_dir: Path,
+    out_json: Path,
+    model_name: str,
+    batch_size: int = 1,
+) -> None:
+    """Run detection over ``frames_dir`` and write results.
+
+    Args:
+        frames_dir: Directory of input frames.
+        out_json: Path to output JSON file.
+        model_name: YOLOX variant name.
+        batch_size: Number of frames processed simultaneously.
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = _load_model(model_name, device)
     frames = sorted(
@@ -111,16 +129,21 @@ def detect_folder(frames_dir: Path, out_json: Path, model_name: str) -> None:
     out: List[dict] = []
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
-        for frame in frames:
-            tensor = _preprocess_image(frame).unsqueeze(0).to(device)
-            with torch.no_grad():
-                outputs = model(tensor)[0]
-            detections = [
-                {"bbox": b, "score": s, "class": c}
-                for b, s, c in _filter_person_detections(outputs)
+        for i in range(0, len(frames), batch_size):
+            batch_paths = frames[i : i + batch_size]
+            batch_tensors = [
+                _preprocess_image(p).unsqueeze(0) for p in batch_paths
             ]
-            out.append({"frame": frame.name, "detections": detections})
-            pbar.update(1)
+            batch = torch.cat(batch_tensors, dim=0).to(device)
+            with torch.no_grad():
+                outputs = model(batch)
+            for path, out_tensor in zip(batch_paths, outputs):
+                detections = [
+                    {"bbox": b, "score": s, "class": c}
+                    for b, s, c in _filter_person_detections(out_tensor)
+                ]
+                out.append({"frame": path.name, "detections": detections})
+            pbar.update(len(batch_paths))
     elapsed = time.perf_counter() - start
 
     if device == "cuda":
@@ -142,7 +165,12 @@ def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     try:
-        detect_folder(args.frames_dir, args.output_json, args.model)
+        detect_folder(
+            args.frames_dir,
+            args.output_json,
+            args.model,
+            args.batch_size,
+        )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Detection failed: %s", exc)
         raise SystemExit(1) from exc

@@ -87,8 +87,14 @@ saved to a JSON file.
 python -m src.detect_objects \
     --frames-dir frames/ \
     --output-json detections.json \
-    --model yolox-s
+    --model yolox-s \
+    --batch-size 2
 ```
+
+`--batch-size` controls how many frames are processed simultaneously. Larger
+values can improve throughput on GPUs but require more memory. Set it to `1`
+when using a CPU or limited VRAM; a value like `4` or `8` is suitable for most
+GPUs.
 
 To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
 
@@ -102,7 +108,8 @@ Run detection inside the container (assumes frames are in ``./frames``):
 docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --frames-dir frames/ \
     --output-json detections.json \
-    --model yolox-s
+    --model yolox-s \
+    --batch-size 2
 ```
 
 This image installs YOLOX and its dependencies using the official
