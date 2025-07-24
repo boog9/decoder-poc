@@ -17,7 +17,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 from PIL import Image, ImageDraw
 
@@ -65,6 +65,25 @@ def _load_detections(path: Path) -> List[dict]:
     return data
 
 
+def _sanitize_bbox(bbox: List[float]) -> Tuple[float, float, float, float]:
+    """Ensure ``bbox`` coordinates are top-left to bottom-right.
+
+    Args:
+        bbox: Bounding box as ``[x1, y1, x2, y2]``.
+
+    Returns:
+        Sanitized bounding box tuple ``(x1, y1, x2, y2)`` with coordinates
+        sorted so ``x2 >= x1`` and ``y2 >= y1``.
+    """
+
+    x1, y1, x2, y2 = bbox
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+    return x1, y1, x2, y2
+
+
 
 def draw_rois(frames_dir: Path, detections_json: Path, output_dir: Path, color: str = "red") -> None:
     """Overlay detection ROIs on frames and save to ``output_dir``.
@@ -94,7 +113,7 @@ def draw_rois(frames_dir: Path, detections_json: Path, output_dir: Path, color: 
             if not isinstance(bbox, list) or len(bbox) != 4:
                 LOGGER.debug("Invalid bbox %s in %s", bbox, frame_name)
                 continue
-            x1, y1, x2, y2 = bbox
+            x1, y1, x2, y2 = _sanitize_bbox(bbox)
             draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
         out_path = output_dir / frame_name
         img.save(out_path)
