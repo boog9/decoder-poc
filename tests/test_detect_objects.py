@@ -157,3 +157,67 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     assert data[0]["detections"][0]["class"] == 0
     bbox = data[0]["detections"][0]["bbox"]
     assert all(isinstance(v, int) for v in bbox)
+
+
+def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "img.jpg").write_bytes(b"\x00")
+
+    class FakeDet(list):
+        def tolist(self):
+            return list(self)
+
+    class FakeHead:
+        def __init__(self) -> None:
+            self.called = False
+
+        def decode_outputs(self, out, size):
+            self.called = True
+            return out
+
+    head = FakeHead()
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.head = head
+
+        def __call__(self, tensor):
+            return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]]
+
+    monkeypatch.setattr(dobj, "_load_model", lambda *a, **k: FakeModel())
+
+    module = types.ModuleType("yolox")
+    utils_mod = types.ModuleType("utils")
+
+    def fake_postprocess(outputs, num_classes, conf_thre, nms_thre, class_agnostic=False):
+        return [FakeDet([0.0, 0.0, 1.0, 1.0, 0.9, 0])]
+
+    utils_mod.postprocess = fake_postprocess
+    module.utils = utils_mod
+    sys.modules["yolox"] = module
+    sys.modules["yolox.utils"] = utils_mod
+
+    class DummyTensor:
+        def unsqueeze(self, dim):
+            return self
+
+        def to(self, device):
+            return self
+
+    monkeypatch.setattr(
+        dobj,
+        "_preprocess_image",
+        lambda p, s: (DummyTensor(), 1.0, 0, 0, 10, 10),
+    )
+
+    out_json = tmp_path / "det.json"
+    dobj.detect_folder(frames, out_json, "yolox-s", 640)
+
+    assert head.called
+    with out_json.open() as fh:
+        data = json.load(fh)
+    assert data and data[0]["detections"]
+
+    sys.modules.pop("yolox.utils", None)
+    sys.modules.pop("yolox", None)
