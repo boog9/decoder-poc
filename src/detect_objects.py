@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Sequence
 
 from PIL import Image
 from tqdm import tqdm
@@ -77,6 +77,25 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
             "Should be a multiple of 32 (default: 640)."
         ),
     )
+    parser.add_argument(
+        "--conf-thres",
+        type=float,
+        default=0.3,
+        help="Confidence threshold for detections (default: 0.3)",
+    )
+    parser.add_argument(
+        "--nms-thres",
+        type=float,
+        default=0.45,
+        help="IoU threshold for non-max suppression (default: 0.45)",
+    )
+    parser.add_argument(
+        "--classes",
+        type=int,
+        nargs="*",
+        default=[0],
+        help="COCO class IDs to keep (default: 0 - person)",
+    )
     return parser.parse_args(argv)
 
 
@@ -126,26 +145,80 @@ def _preprocess_image(
     return tensor, ratio, pad_x, pad_y, w0, h0
 
 
-def _filter_person_detections(
-    outputs: torch.Tensor,
+def _iou(box_a: Sequence[float], box_b: Sequence[float]) -> float:
+    """Compute Intersection over Union for two boxes."""
+
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    inter = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - inter
+    return inter / union
+
+
+def _nms(boxes: List[Sequence[float]], scores: List[float], thr: float) -> List[int]:
+    """Pure Python NMS returning kept indices sorted by score."""
+
+    order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+    keep: List[int] = []
+    while order:
+        i = order.pop(0)
+        keep.append(i)
+        order = [
+            j for j in order if _iou(boxes[i], boxes[j]) <= thr
+        ]
+    return keep
+
+
+def _filter_detections(
+    outputs: Sequence[Sequence[float]],
+    classes: Sequence[int],
+    conf_thr: float,
+    nms_thr: float,
 ) -> List[Tuple[List[float], float, int]]:
-    """Filter YOLOX detections to only ``person`` class."""
-    results = []
-    # YOLOX outputs: [x1, y1, x2, y2, score, class]
+    """Filter raw detections by class, confidence and NMS."""
+
+    boxes: List[List[float]] = []
+    scores: List[float] = []
+    cls_ids: List[int] = []
     for det in outputs:
         cls = int(det[5])
-        if cls != 0:
+        if classes and cls not in classes:
             continue
-        bbox = det[:4].tolist()
         score = float(det[4])
-        results.append((bbox, score, cls))
-    return results
+        if score < conf_thr:
+            continue
+        boxes.append([float(det[0]), float(det[1]), float(det[2]), float(det[3])])
+        scores.append(score)
+        cls_ids.append(cls)
+
+    if not boxes:
+        return []
+
+    keep = _nms(boxes, scores, nms_thr)
+    return [
+        (boxes[i], scores[i], cls_ids[i])
+        for i in keep
+    ]
 
 
 
 
 def detect_folder(
-    frames_dir: Path, out_json: Path, model_name: str, img_size: int
+    frames_dir: Path,
+    out_json: Path,
+    model_name: str,
+    img_size: int,
+    conf_thres: float = 0.3,
+    nms_thres: float = 0.45,
+    classes: Sequence[int] | None = None,
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
@@ -176,9 +249,12 @@ def detect_folder(
             tensor = tensor.unsqueeze(0).to(device)
             with torch.no_grad():
                 outputs = model(tensor)[0]
-
+            if hasattr(outputs, "tolist"):
+                outputs_list = outputs.tolist()
+            else:
+                outputs_list = outputs
             detections = []
-            for bbox, score, cls in _filter_person_detections(outputs):
+            for bbox, score, cls in _filter_detections(outputs_list, classes or [], conf_thres, nms_thres):
                 x0 = max((bbox[0] - pad_x) / ratio, 0.0)
                 y0 = max((bbox[1] - pad_y) / ratio, 0.0)
                 x1 = min((bbox[2] - pad_x) / ratio, w0)
@@ -230,7 +306,13 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     try:
         detect_folder(
-            args.frames_dir, args.output_json, args.model, args.img_size
+            args.frames_dir,
+            args.output_json,
+            args.model,
+            args.img_size,
+            args.conf_thres,
+            args.nms_thres,
+            args.classes,
         )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.exception("Detection failed")
