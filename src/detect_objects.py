@@ -179,22 +179,30 @@ def detect_folder(
 
             detections = []
             for bbox, score, cls in _filter_person_detections(outputs):
-                x0 = max((bbox[0] - pad_x) / ratio, 0)
-                y0 = max((bbox[1] - pad_y) / ratio, 0)
+                x0 = max((bbox[0] - pad_x) / ratio, 0.0)
+                y0 = max((bbox[1] - pad_y) / ratio, 0.0)
                 x1 = min((bbox[2] - pad_x) / ratio, w0)
                 y1 = min((bbox[3] - pad_y) / ratio, h0)
-                if x1 > x0 and y1 > y0:
+
+                ix0, iy0, ix1, iy1 = (
+                    int(round(x0)),
+                    int(round(y0)),
+                    int(round(x1)),
+                    int(round(y1)),
+                )
+
+                if ix1 > ix0 and iy1 > iy0:
                     detections.append(
                         {
-                            "bbox": [int(x0), int(y0), int(x1), int(y1)],
+                            "bbox": [ix0, iy0, ix1, iy1],
                             "score": score,
                             "class": cls,
                         }
                     )
-
-            for det in detections:
-                x0, y0, x1, y1 = det["bbox"]
-                assert 0 <= x0 < x1 <= w0 and 0 <= y0 < y1 <= h0
+                else:
+                    LOGGER.debug(
+                        "Discarded invalid box %s from %s", [x0, y0, x1, y1], frame.name
+                    )
 
             out.append({"frame": frame.name, "detections": detections})
             pbar.update(1)
@@ -225,7 +233,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             args.frames_dir, args.output_json, args.model, args.img_size
         )
     except Exception as exc:  # pragma: no cover - top level
-        LOGGER.error("Detection failed: %s", exc)
+        LOGGER.exception("Detection failed")
         raise SystemExit(1) from exc
 
 
