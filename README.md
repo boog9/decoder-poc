@@ -87,7 +87,7 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 
 Run YOLOX object detection on extracted frames. A CUDA-enabled GPU and YOLOX
 ``v0.3`` or newer are required. The ``--classes`` option controls which object
-categories to keep (default: ``person racket ball``).
+categories to keep (default: ``0 32`` where ``32`` is ``sports ball``).
 
 ```bash
 python -m src.detect_objects \
@@ -97,7 +97,7 @@ python -m src.detect_objects \
     --img-size 640 \
     --conf-thres 0.30 \
     --nms-thres 0.45 \
-    --classes person ball
+    --classes 0 32
 ```
 
 To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
@@ -116,7 +116,7 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --img-size 640 \
     --conf-thres 0.30 \
     --nms-thres 0.45 \
-    --classes person ball
+    --classes 0 32
 ```
 
 Example ``detections.json`` output:
