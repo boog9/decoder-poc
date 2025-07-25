@@ -208,8 +208,8 @@ def detect_folder(
         img_size: Target input size for the model.
     """
     model = _load_model(model_name)
-    # Always keep only person and sports ball detections.
-    class_ids = list(CLASS_MAP.values())
+    if class_ids is None:
+        class_ids = list(CLASS_MAP.values())
     frames = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
