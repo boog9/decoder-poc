@@ -150,7 +150,9 @@ python -m src.draw_roi \
 ```
 
 The command reads detection results from ``detections.json`` and writes
-annotated images to ``frames_roi`` using red rectangles by default.
+annotated images to ``frames_roi`` using red rectangles by default. The
+bounding box coordinates are expected to match the original frame pixels,
+so no scaling is applied when drawing.
 
 ## Detection Validation CLI
 

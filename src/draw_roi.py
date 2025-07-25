@@ -177,7 +177,7 @@ def draw_rois(
         frames_dir: Directory of frame images.
         detections_json: JSON file with detection results.
         output_dir: Destination for annotated images.
-        img_size: Square size used during detection preprocessing.
+        img_size: Unused. Present for backwards compatibility.
         color: Outline color for rectangles.
     """
     detections = _load_detections(detections_json)
@@ -201,16 +201,11 @@ def draw_rois(
             LOGGER.warning("Failed to read %s", frame_path)
             continue
 
-        ratio, pad_x, pad_y, w0, h0 = _preprocess_params(img, img_size)
-
         for bbox in rois:
             if not isinstance(bbox, list) or len(bbox) != 4:
                 LOGGER.debug("Invalid bbox %s in %s", bbox, frame_name)
                 continue
-            x1, y1, x2, y2 = _sanitize_bbox(bbox)
-            x1, y1, x2, y2 = _backproject_bbox(
-                (x1, y1, x2, y2), ratio, pad_x, pad_y, w0, h0
-            )
+            x1, y1, x2, y2 = map(int, _sanitize_bbox(bbox))
 
             if x2 > x1 and y2 > y1:
                 cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
