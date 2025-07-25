@@ -19,7 +19,8 @@ import logging
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
-from PIL import Image, ImageDraw
+import cv2
+from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         type=Path,
         required=True,
         help="Where annotated frames will be written",
+    )
+    parser.add_argument(
+        "--img-size",
+        type=int,
+        default=640,
+        help="Inference square size used during detection",
     )
     parser.add_argument(
         "--color",
@@ -82,10 +89,54 @@ def _sanitize_bbox(bbox: List[float]) -> Tuple[float, float, float, float]:
     return x1, y1, x2, y2
 
 
+def _preprocess_params(img: Any, size: int) -> Tuple[float, float, float, int, int]:
+    """Compute scaling parameters using YOLOX ``ValTransform``.
+
+    Args:
+        img: Image array in BGR format.
+        size: Target square size for inference.
+
+    Returns:
+        Tuple of ``(ratio, pad_x, pad_y, width, height)`` describing the
+        resize ratio, horizontal padding, vertical padding and original
+        dimensions.
+    """
+
+    from yolox.data.data_augment import ValTransform
+
+    h0, w0 = img.shape[:2]
+
+    preproc = ValTransform(legacy=False)
+    processed, _ = preproc(img, None, (size, size))
+
+    _, new_h, new_w = processed.shape
+    pad_x = (size - new_w) / 2
+    pad_y = (size - new_h) / 2
+
+    ratio = new_w / w0
+
+    return ratio, pad_x, pad_y, w0, h0
+
+
+def _color_bgr(name: str) -> Tuple[int, int, int]:
+    """Return a BGR tuple for a given color name."""
+
+    colors = {
+        "red": (0, 0, 255),
+        "green": (0, 255, 0),
+        "blue": (255, 0, 0),
+        "yellow": (0, 255, 255),
+        "white": (255, 255, 255),
+        "black": (0, 0, 0),
+    }
+    return colors.get(name.lower(), (0, 0, 255))
+
+
 def draw_rois(
     frames_dir: Path,
     detections_json: Path,
     output_dir: Path,
+    img_size: int,
     color: str = "red",
 ) -> None:
     """Overlay detection ROIs on frames and save to ``output_dir``.
@@ -94,10 +145,13 @@ def draw_rois(
         frames_dir: Directory of frame images.
         detections_json: JSON file with detection results.
         output_dir: Destination for annotated images.
+        img_size: Square size used during detection preprocessing.
         color: Outline color for rectangles.
     """
     detections = _load_detections(detections_json)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    bgr = _color_bgr(color)
 
     for entry in detections:
         frame_name = entry.get("frame")
@@ -109,18 +163,33 @@ def draw_rois(
         if not frame_path.exists():
             LOGGER.warning("Frame not found: %s", frame_path)
             continue
-        img = Image.open(frame_path).convert("RGB")
-        draw = ImageDraw.Draw(img)
+
+        img = cv2.imread(str(frame_path))
+        if img is None:
+            LOGGER.warning("Failed to read %s", frame_path)
+            continue
+
+        ratio, pad_x, pad_y, w0, h0 = _preprocess_params(img, img_size)
+
         for bbox in rois:
             if not isinstance(bbox, list) or len(bbox) != 4:
                 LOGGER.debug("Invalid bbox %s in %s", bbox, frame_name)
                 continue
             x1, y1, x2, y2 = _sanitize_bbox(bbox)
-            assert x1 < x2, f"x1 >= x2 in {frame_name}: {bbox}"
-            assert y1 < y2, f"y1 >= y2 in {frame_name}: {bbox}"
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+            x1 = max(int(round((x1 - pad_x) / ratio)), 0)
+            y1 = max(int(round((y1 - pad_y) / ratio)), 0)
+            x2 = min(int(round((x2 - pad_x) / ratio)), w0)
+            y2 = min(int(round((y2 - pad_y) / ratio)), h0)
+
+            if x2 > x1 and y2 > y1:
+                cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
+            else:
+                LOGGER.debug(
+                    "Discarded invalid box %s from %s", [x1, y1, x2, y2], frame_name
+                )
+
         out_path = output_dir / frame_name
-        img.save(out_path)
+        cv2.imwrite(str(out_path), img)
         LOGGER.debug("Wrote %s", out_path)
 
 
@@ -132,7 +201,11 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     try:
         draw_rois(
-            args.frames_dir, args.detections_json, args.output_dir, args.color
+            args.frames_dir,
+            args.detections_json,
+            args.output_dir,
+            args.img_size,
+            args.color,
         )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Failed to draw ROIs: %s", exc)
