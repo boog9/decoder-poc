@@ -86,8 +86,9 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 ## Object Detection CLI
 
 Run YOLOX object detection on extracted frames. A CUDA-enabled GPU and YOLOX
-``v0.3`` or newer are required. The ``--classes`` option controls which object
-categories to keep (default: ``0 32`` where ``32`` is ``sports ball``).
+``v0.3`` or newer are required. The ``--classes`` option takes one or more
+numeric class IDs. Only detections for these IDs are written to
+``detections.json``. By default ``0 32`` keeps ``person`` and ``sports ball``.
 
 ```bash
 python -m src.detect_objects \
@@ -149,13 +150,14 @@ Overlay detection bounding boxes on extracted frames.
 python -m src.draw_roi \
     --frames-dir frames/ \
     --detections-json detections.json \
-    --output-dir frames_roi/
+    --output-dir frames_roi/ \
+    --label
 ```
 
 The command reads detection results from ``detections.json`` and writes
-annotated images to ``frames_roi`` using red rectangles by default. The
-bounding box coordinates are expected to match the original frame pixels,
-so no scaling is applied when drawing.
+annotated images to ``frames_roi``. Using ``--label`` draws the COCO class name
+and confidence score above each box. The bounding box coordinates are expected
+to match the original frame pixels, so no scaling is applied when drawing.
 
 ## Detection Validation CLI
 
