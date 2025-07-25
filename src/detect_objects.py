@@ -35,6 +35,14 @@ LOGGER = logging.getLogger(__name__)
 
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
+# Mapping of human-readable class names to COCO class IDs. Adjust if using a
+# different dataset.
+CLASS_MAP = {
+    "person": 0,
+    "racket": 1,
+    "ball": 2,
+}
+
 # Map CLI model names to torch.hub callable names.
 _YOLOX_MODEL_MAP = {
     "yolox-s": "yolox_s",
@@ -90,6 +98,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         type=float,
         default=0.45,
         help="IoU threshold for non-max suppression (default: 0.45)",
+    )
+    parser.add_argument(
+        "--classes",
+        nargs="+",
+        default=list(CLASS_MAP.keys()),
+        help="Classes to detect",
     )
     return parser.parse_args(argv)
 
@@ -156,10 +170,11 @@ def _preprocess_image(
 def _filter_detections(
     outputs: Sequence[Sequence[float]],
     conf_thr: float,
+    keep_ids: Sequence[int],
 ) -> List[Tuple[List[float], float, int]]:
-    """Filter YOLOX detections for the person class."""
+    """Filter YOLOX detections for selected classes."""
 
-    keep_ids = {0}
+    allowed = set(keep_ids)
     return [
         (
             [float(det[0]), float(det[1]), float(det[2]), float(det[3])],
@@ -167,7 +182,7 @@ def _filter_detections(
             int(det[5]),
         )
         for det in outputs
-        if int(det[5]) in keep_ids and float(det[4]) >= conf_thr
+        if int(det[5]) in allowed and float(det[4]) >= conf_thr
     ]
 
 
@@ -180,10 +195,11 @@ def detect_folder(
     img_size: int,
     conf_thres: float = 0.3,
     nms_thres: float = 0.45,
+    class_ids: Sequence[int] | None = None,
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
-    Only detections of the ``person`` class are kept.
+    Only detections with ``class_ids`` are kept.
 
     Args:
         frames_dir: Directory containing frame images.
@@ -192,6 +208,8 @@ def detect_folder(
         img_size: Target input size for the model.
     """
     model = _load_model(model_name)
+    if class_ids is None:
+        class_ids = [CLASS_MAP["person"]]
     frames = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
@@ -228,7 +246,7 @@ def detect_folder(
             outputs_list = det.cpu().tolist() if det is not None else []
 
             detections = []
-            for bbox, score, cls in _filter_detections(outputs_list, conf_thres):
+            for bbox, score, cls in _filter_detections(outputs_list, conf_thres, class_ids):
                 x0 = max((bbox[0] - pad_x) / ratio, 0.0)
                 y0 = max((bbox[1] - pad_y) / ratio, 0.0)
                 x1 = min((bbox[2] - pad_x) / ratio, w0)
@@ -278,6 +296,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
     )
     try:
+        try:
+            class_ids = [CLASS_MAP[c] for c in args.classes]
+        except KeyError as exc:
+            valid = ", ".join(sorted(CLASS_MAP))
+            raise SystemExit(f"Unknown class {exc.args[0]}. Available: {valid}") from exc
         detect_folder(
             args.frames_dir,
             args.output_json,
@@ -285,6 +308,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             args.img_size,
             args.conf_thres,
             args.nms_thres,
+            class_ids,
         )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.exception("Detection failed")

@@ -60,6 +60,7 @@ def test_parse_args_defaults() -> None:
     assert isinstance(args, argparse.Namespace)
     assert args.model == "yolox-s"
     assert args.img_size == 640
+    assert args.classes == ["person", "racket", "ball"]
 
 
 def test_load_model_translates_hyphen(monkeypatch) -> None:
@@ -289,6 +290,6 @@ def test_detect_folder_single_frame(monkeypatch, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("rows", [[[0, 0, 1, 1, 0.9, 0]]])
 def test_filter_cpu(rows) -> None:
-    assert dobj._filter_detections(rows, 0.5)
+    assert dobj._filter_detections(rows, 0.5, [0])
 
 

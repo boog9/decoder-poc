@@ -17,7 +17,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Iterable, List, Dict
+from typing import Iterable, List, Dict, Sequence
 
 import torch
 from PIL import Image, ImageDraw
@@ -54,8 +54,22 @@ def detect_image(
     conf_thres: float,
     nms_thres: float,
     device: torch.device,
+    class_ids: Sequence[int] | None = None,
 ) -> List[Dict]:
-    """Run YOLOX detection on ``image_path``."""
+    """Run YOLOX detection on ``image_path``.
+
+    Args:
+        image_path: Path to the input image.
+        model_name: YOLOX model variant name.
+        img_size: Square size for model input.
+        conf_thres: Confidence threshold.
+        nms_thres: NMS IoU threshold.
+        device: Device to run inference on.
+        class_ids: Classes to keep. Defaults to only the ``person`` class.
+
+    Returns:
+        List of detection dictionaries.
+    """
     model = _load_model_device(model_name, device)
     tensor, ratio, pad_x, pad_y, w0, h0 = dobj._preprocess_image(image_path, img_size)
     with torch.no_grad():
@@ -77,7 +91,9 @@ def detect_image(
     outputs_list = det.cpu().tolist() if det is not None else []
 
     detections: List[Dict] = []
-    for bbox, score, cls in dobj._filter_detections(outputs_list, conf_thres):
+    if class_ids is None:
+        class_ids = [dobj.CLASS_MAP["person"]]
+    for bbox, score, cls in dobj._filter_detections(outputs_list, conf_thres, class_ids):
         x0 = max((bbox[0] - pad_x) / ratio, 0.0)
         y0 = max((bbox[1] - pad_y) / ratio, 0.0)
         x1 = min((bbox[2] - pad_x) / ratio, w0)
