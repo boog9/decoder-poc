@@ -9,7 +9,7 @@ python src/frame_extractor.py -i <video.mp4> -o /path/to/output -f 30
 ```
 
 - `-i`, `--input`: Path to input video.
-- `-o`, `--output`: Output directory for JPEG frames.
+- `-o`, `--output`: Output directory for PNG frames.
 - `-f`, `--fps`: Frames per second to extract (default: 30).
 - `-v`, `--verbose`: Increase logging detail.
 
@@ -125,13 +125,13 @@ Example ``detections.json`` output:
 ```json
 [
   {
-    "frame": "frame_000001.jpg",
+    "frame": "frame_000001.png",
     "detections": [
       {"bbox": [15, 30, 210, 330], "score": 0.91, "class": 0}
     ]
   },
   {
-    "frame": "frame_000002.jpg",
+    "frame": "frame_000002.png",
     "detections": []
   }
 ]

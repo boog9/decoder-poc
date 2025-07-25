@@ -94,5 +94,5 @@ def test_extract_frames(tmp_path: Path) -> None:
 
     frame_extractor.extract_frames(video, output_dir, fps=10)
 
-    extracted = list(output_dir.glob("*.jpg"))
+    extracted = list(output_dir.glob("*.png"))
     assert extracted, "No frames were extracted"
