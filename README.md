@@ -87,8 +87,8 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 
 Run YOLOX object detection on extracted frames. A CUDA-enabled GPU and YOLOX
 ``v0.3`` or newer are required. The ``--classes`` option takes one or more
-numeric class IDs. Only detections for these IDs are written to
-``detections.json``. By default ``0 32`` keeps ``person`` and ``sports ball``.
+numeric class IDs. If omitted, detections for all classes are kept. For
+example, ``--classes 0 32`` keeps only ``person`` and ``sports ball``.
 
 ```bash
 python -m src.detect_objects \
