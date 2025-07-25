@@ -291,7 +291,6 @@ def draw_rois(
     for entry in detections:
         frame_name = entry.get("frame")
         detections_raw = entry.get("detections", [])
-        rois = [det.get("bbox") for det in detections_raw]
         if not frame_name:
             LOGGER.debug("Skipping detection entry without frame")
             continue
@@ -305,18 +304,17 @@ def draw_rois(
             LOGGER.warning("Failed to read %s", frame_path)
             continue
 
-        for bbox in rois:
+        for det in detections_raw:
+            bbox = det.get("bbox")
             if not isinstance(bbox, list) or len(bbox) != 4:
                 LOGGER.debug("Invalid bbox %s in %s", bbox, frame_name)
                 continue
             x1, y1, x2, y2 = map(int, _sanitize_bbox(bbox))
 
             if x2 > x1 and y2 > y1:
+                class_id = det.get("class", -1)
+                score = det.get("score")
                 if label:
-                    idx = rois.index(bbox)
-                    det = detections_raw[idx]
-                    class_id = det.get("class", -1)
-                    score = det.get("score")
                     clr = _label_color(class_id)
                     if 0 <= class_id < len(COCO_CLASS_NAMES):
                         class_name = COCO_CLASS_NAMES[class_id]
@@ -330,7 +328,9 @@ def draw_rois(
                         text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
                     )
                     top = max(y1 - th - bl - 2, 0)
-                    cv2.rectangle(img, (x1, top), (x1 + tw, top + th + bl), clr, -1)
+                    cv2.rectangle(
+                        img, (x1, top), (x1 + tw, top + th + bl), clr, -1
+                    )
                     cv2.putText(
                         img,
                         text,

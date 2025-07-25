@@ -199,8 +199,7 @@ def detect_folder(
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
-    Only detections with IDs in ``class_ids`` are written. If ``class_ids`` is
-    ``None``, ``[0, 32]`` (``person`` and ``sports ball``) are used.
+    Only detections for ``person`` or ``sports ball`` are written.
 
     Args:
         frames_dir: Directory containing frame images.
@@ -209,8 +208,8 @@ def detect_folder(
         img_size: Target input size for the model.
     """
     model = _load_model(model_name)
-    if class_ids is None:
-        class_ids = list(CLASS_MAP.values())
+    # Always keep only person and sports ball detections.
+    class_ids = list(CLASS_MAP.values())
     frames = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
