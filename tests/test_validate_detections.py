@@ -36,11 +36,11 @@ class DummyImage:
 def test_sanity_check_counts(tmp_path: Path, monkeypatch) -> None:
     frames = tmp_path / "frames"
     frames.mkdir()
-    (frames / "f1.jpg").write_bytes(b"\x00")
+    (frames / "f1.png").write_bytes(b"\x00")
 
     det_json = tmp_path / "det.json"
     det_json.write_text(
-        "[{'frame': 'f1.jpg', 'detections': [{'bbox': [0,0,5,5], 'score': 0.2},"
+        "[{'frame': 'f1.png', 'detections': [{'bbox': [0,0,5,5], 'score': 0.2},"
         " {'bbox': [-1,0,2,2], 'score': 0.9}]}]".replace("'", '"')
     )
 

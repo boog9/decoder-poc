@@ -43,7 +43,7 @@ def build_ffmpeg_command(input_video: str, output_dir: str, fps: int) -> List[st
     Returns:
         List of command tokens.
     """
-    output_pattern = os.path.join(output_dir, "frame_%06d.jpg")
+    output_pattern = os.path.join(output_dir, "frame_%06d.png")
     return [
         "ffmpeg",
         "-hide_banner",
@@ -135,7 +135,7 @@ def extract_frames(input_video: Path, output_dir: Path, fps: int) -> None:
         str(input_video),
         "-vf",
         f"fps={fps}",
-        str(output_dir / "frame_%06d.jpg"),
+        str(output_dir / "frame_%06d.png"),
         "-loglevel",
         "error",
         "-progress",
