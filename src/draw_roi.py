@@ -50,7 +50,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--img-size",
         type=int,
         default=640,
-        help="Inference square size used during detection",
+        help="Image size used during detection",
+    )
+    parser.add_argument(
+        "--label",
+        action="store_true",
+        help="Draw boxes with color per class label",
     )
     parser.add_argument(
         "--color",
@@ -164,12 +169,33 @@ def _color_bgr(name: str) -> Tuple[int, int, int]:
     return colors.get(name.lower(), (0, 0, 255))
 
 
+CLASS_NAMES = {
+    0: "person",
+    1: "racket",
+    2: "ball",
+}
+
+
+CLASS_COLORS = {
+    0: (255, 56, 56),
+    1: (72, 118, 255),
+    2: (0, 255, 0),
+}
+
+
+def _label_color(class_id: int) -> Tuple[int, int, int]:
+    """Return color for ``class_id``."""
+
+    return CLASS_COLORS.get(class_id, (0, 0, 255))
+
+
 def draw_rois(
     frames_dir: Path,
     detections_json: Path,
     output_dir: Path,
     img_size: int,
     color: str = "red",
+    label: bool = False,
 ) -> None:
     """Overlay detection ROIs on frames and save to ``output_dir``.
 
@@ -179,6 +205,7 @@ def draw_rois(
         output_dir: Destination for annotated images.
         img_size: Unused. Present for backwards compatibility.
         color: Outline color for rectangles.
+        label: If ``True``, color boxes by class and draw labels with score.
     """
     detections = _load_detections(detections_json)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -187,7 +214,8 @@ def draw_rois(
 
     for entry in detections:
         frame_name = entry.get("frame")
-        rois = [det.get("bbox") for det in entry.get("detections", [])]
+        detections_raw = entry.get("detections", [])
+        rois = [det.get("bbox") for det in detections_raw]
         if not frame_name:
             LOGGER.debug("Skipping detection entry without frame")
             continue
@@ -208,7 +236,34 @@ def draw_rois(
             x1, y1, x2, y2 = map(int, _sanitize_bbox(bbox))
 
             if x2 > x1 and y2 > y1:
-                cv2.rectangle(img, (x1, y1), (x2, y2), bgr, 2)
+                if label:
+                    idx = rois.index(bbox)
+                    det = detections_raw[idx]
+                    class_id = det.get("class", -1)
+                    score = det.get("score")
+                    clr = _label_color(class_id)
+                    class_name = CLASS_NAMES.get(class_id, f"id{class_id}")
+                    text = class_name
+                    if score is not None:
+                        text += f" {int(score * 100)}%"
+                    (tw, th), bl = cv2.getTextSize(
+                        text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+                    )
+                    top = max(y1 - th - bl - 2, 0)
+                    cv2.rectangle(img, (x1, top), (x1 + tw, top + th + bl), clr, -1)
+                    cv2.putText(
+                        img,
+                        text,
+                        (x1, top + th),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 255, 255),
+                        2,
+                        lineType=cv2.LINE_AA,
+                    )
+                else:
+                    clr = bgr
+                cv2.rectangle(img, (x1, y1), (x2, y2), clr, 2)
             else:
                 LOGGER.debug(
                     "Discarded invalid box %s from %s", [x1, y1, x2, y2], frame_name
@@ -232,6 +287,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             args.output_dir,
             args.img_size,
             args.color,
+            args.label,
         )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.error("Failed to draw ROIs: %s", exc)
