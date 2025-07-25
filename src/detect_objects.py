@@ -27,7 +27,6 @@ from PIL import Image
 from tqdm import tqdm
 
 import torch
-from torchvision.transforms.functional import to_tensor
 
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA device required for YOLOX")
@@ -124,17 +123,31 @@ def _letterbox_image(
 def _preprocess_image(
     path: Path, size: int
 ) -> tuple[torch.Tensor, float, int, int, int, int]:
-    """Load image and letterbox to ``size`` square tensor.
+    """Preprocess image using YOLOX's :class:`ValTransform`.
 
-    Returns the tensor along with resize metadata for back-projection.
+    The returned tensor is ready for model input and the metadata is used for
+    projecting detections back to the original image coordinates.
     """
 
-    # safeguard remains – YOLOX expects strides * 32
-    img = Image.open(path).convert("RGB")
-    w0, h0 = img.size
-    img, ratio, pad_x, pad_y = _letterbox_image(img, size)
-    tensor = to_tensor(img)
-    return tensor, ratio, pad_x, pad_y, w0, h0
+    import cv2  # defer heavy import
+    from yolox.data.data_augment import ValTransform
+
+    img = cv2.imread(str(path))
+    if img is None:
+        raise FileNotFoundError(path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    h0, w0 = img.shape[:2]
+
+    preproc = ValTransform(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    processed, ratio = preproc(img, None, (size, size))
+
+    tensor = torch.from_numpy(processed).float()
+
+    new_w = int(w0 * ratio)
+    new_h = int(h0 * ratio)
+    pad_x = (size - new_w) / 2
+    pad_y = (size - new_h) / 2
+    return tensor, float(ratio), pad_x, pad_y, w0, h0
 
 
 def _filter_detections(
