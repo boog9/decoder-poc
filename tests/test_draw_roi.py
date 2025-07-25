@@ -85,7 +85,6 @@ def test_parse_args_defaults() -> None:
 
 def test_draw_rois_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dummy_cv2 = _setup_cv2(monkeypatch)
-    monkeypatch.setattr(dr, "_preprocess_params", lambda img, size: (1.0, 0.0, 0.0, 10, 10))
 
     frames = tmp_path / "frames"
     frames.mkdir()
@@ -104,7 +103,6 @@ def test_draw_rois_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_draw_rois_sanitizes_bbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _setup_cv2(monkeypatch)
-    monkeypatch.setattr(dr, "_preprocess_params", lambda img, size: (1.0, 0.0, 0.0, 10, 10))
 
     frames = tmp_path / "frames"
     frames.mkdir()

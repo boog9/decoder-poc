@@ -85,8 +85,9 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 
 ## Object Detection CLI
 
-Run YOLOX object detection on extracted frames. Only ``person`` detections are
-saved. A CUDA-enabled GPU and YOLOX ``v0.3`` or newer are required.
+Run YOLOX object detection on extracted frames. A CUDA-enabled GPU and YOLOX
+``v0.3`` or newer are required. The ``--classes`` option controls which object
+categories to keep (default: ``person racket ball``).
 
 ```bash
 python -m src.detect_objects \
@@ -95,7 +96,8 @@ python -m src.detect_objects \
     --model yolox-s \
     --img-size 640 \
     --conf-thres 0.30 \
-    --nms-thres 0.45
+    --nms-thres 0.45 \
+    --classes person ball
 ```
 
 To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
@@ -113,7 +115,8 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --model yolox-s \
     --img-size 640 \
     --conf-thres 0.30 \
-    --nms-thres 0.45
+    --nms-thres 0.45 \
+    --classes person ball
 ```
 
 Example ``detections.json`` output:
@@ -150,7 +153,9 @@ python -m src.draw_roi \
 ```
 
 The command reads detection results from ``detections.json`` and writes
-annotated images to ``frames_roi`` using red rectangles by default.
+annotated images to ``frames_roi`` using red rectangles by default. The
+bounding box coordinates are expected to match the original frame pixels,
+so no scaling is applied when drawing.
 
 ## Detection Validation CLI
 

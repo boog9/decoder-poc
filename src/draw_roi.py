@@ -95,32 +95,64 @@ def _sanitize_bbox(bbox: List[float]) -> Tuple[float, float, float, float]:
 
 
 def _preprocess_params(img: Any, size: int) -> Tuple[float, float, float, int, int]:
-    """Compute scaling parameters using YOLOX ``ValTransform``.
+    """Compute resize ratio and padding for ``img``.
+
+    This replicates the behaviour of YOLOX :class:`ValTransform` used in
+    :mod:`src.detect_objects`. The function does not require the YOLOX package
+    and therefore allows drawing ROIs in environments where YOLOX is not
+    installed.
 
     Args:
-        img: Image array in BGR format.
+        img: Image array in ``BGR`` format.
         size: Target square size for inference.
 
     Returns:
-        Tuple of ``(ratio, pad_x, pad_y, width, height)`` describing the
-        resize ratio, horizontal padding, vertical padding and original
-        dimensions.
+        A tuple ``(ratio, pad_x, pad_y, width, height)`` with the resize ratio,
+        horizontal padding, vertical padding and the original dimensions.
     """
-
-    from yolox.data.data_augment import ValTransform
 
     h0, w0 = img.shape[:2]
 
-    preproc = ValTransform(legacy=False)
-    processed, _ = preproc(img, None, (size, size))
-
-    _, new_h, new_w = processed.shape
+    scale = min(size / w0, size / h0)
+    new_w = int(w0 * scale)
+    new_h = int(h0 * scale)
     pad_x = (size - new_w) / 2
     pad_y = (size - new_h) / 2
 
     ratio = new_w / w0
 
     return ratio, pad_x, pad_y, w0, h0
+
+
+def _backproject_bbox(
+    bbox: Tuple[float, float, float, float],
+    ratio: float,
+    pad_x: float,
+    pad_y: float,
+    width: int,
+    height: int,
+) -> Tuple[int, int, int, int]:
+    """Project ``bbox`` from model coordinates to the original image.
+
+    Args:
+        bbox: Bounding box ``(x1, y1, x2, y2)`` from the model output.
+        ratio: Resize ratio used during preprocessing.
+        pad_x: Horizontal padding used during preprocessing.
+        pad_y: Vertical padding used during preprocessing.
+        width: Original image width.
+        height: Original image height.
+
+    Returns:
+        Integer bounding box coordinates in the original image space.
+    """
+
+    x1, y1, x2, y2 = bbox
+    x1 = max(int(round((x1 - pad_x) / ratio)), 0)
+    y1 = max(int(round((y1 - pad_y) / ratio)), 0)
+    x2 = min(int(round((x2 - pad_x) / ratio)), width)
+    y2 = min(int(round((y2 - pad_y) / ratio)), height)
+
+    return x1, y1, x2, y2
 
 
 def _color_bgr(name: str) -> Tuple[int, int, int]:
@@ -171,7 +203,7 @@ def draw_rois(
         frames_dir: Directory of frame images.
         detections_json: JSON file with detection results.
         output_dir: Destination for annotated images.
-        img_size: Square size used during detection preprocessing.
+        img_size: Unused. Present for backwards compatibility.
         color: Outline color for rectangles.
         label: If ``True``, color boxes by class and draw labels with score.
     """
@@ -197,17 +229,11 @@ def draw_rois(
             LOGGER.warning("Failed to read %s", frame_path)
             continue
 
-        ratio, pad_x, pad_y, w0, h0 = _preprocess_params(img, img_size)
-
         for bbox in rois:
             if not isinstance(bbox, list) or len(bbox) != 4:
                 LOGGER.debug("Invalid bbox %s in %s", bbox, frame_name)
                 continue
-            x1, y1, x2, y2 = _sanitize_bbox(bbox)
-            x1 = max(int(round((x1 - pad_x) / ratio)), 0)
-            y1 = max(int(round((y1 - pad_y) / ratio)), 0)
-            x2 = min(int(round((x2 - pad_x) / ratio)), w0)
-            y2 = min(int(round((y2 - pad_y) / ratio)), h0)
+            x1, y1, x2, y2 = map(int, _sanitize_bbox(bbox))
 
             if x2 > x1 and y2 > y1:
                 if label:
