@@ -69,10 +69,15 @@ that ``python`` and ``pip`` come from the same environment:
 python -m pip install -U -r requirements.txt
 ```
 
-The YOLOX models loaded via ``torch.hub`` also require the ``loguru`` package,
-OpenCV, and ``tabulate``. These dependencies are included in
-``requirements.txt`` (``loguru``, ``opencv-python-headless``, ``tabulate``). If
-installing individually, add these packages before running the detection CLI.
+Install the following packages to run detection:
+
+* ``torch`` (with CUDA support)
+* ``opencv-python-headless``
+* ``loguru``
+* ``tabulate``
+
+YOLOX 0.3+ is required and can be installed from GitHub or via the provided
+Docker image. These dependencies are already included in ``requirements.txt``.
 
 Alternatively, build the Docker image which installs everything via `make build`.
 The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
@@ -81,7 +86,7 @@ The Pillow and NumPy packages used by ``frame_enhancer.py`` come from
 ## Object Detection CLI
 
 Run YOLOX object detection on extracted frames. Only ``person`` detections are
-saved. This command requires a CUDA-enabled GPU and YOLOX 0.3+.
+saved. A CUDA-enabled GPU and YOLOX ``v0.3`` or newer are required.
 
 ```bash
 python -m src.detect_objects \
@@ -106,7 +111,26 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --frames-dir frames/ \
     --output-json detections.json \
     --model yolox-s \
-    --img-size 640
+    --img-size 640 \
+    --conf-thres 0.30 \
+    --nms-thres 0.45
+```
+
+Example ``detections.json`` output:
+
+```json
+[
+  {
+    "frame": "frame_000001.jpg",
+    "detections": [
+      {"bbox": [15, 30, 210, 330], "score": 0.91, "class": 0}
+    ]
+  },
+  {
+    "frame": "frame_000002.jpg",
+    "detections": []
+  }
+]
 ```
 
 This image installs YOLOX and its dependencies using the official
