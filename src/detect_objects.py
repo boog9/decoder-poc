@@ -28,6 +28,12 @@ from tqdm import tqdm
 
 import torch
 
+try:
+    from yolox.data.datasets import COCO_CLASSES
+    YOLOX_NUM_CLASSES = len(COCO_CLASSES)
+except Exception:  # pragma: no cover - optional dependency
+    YOLOX_NUM_CLASSES = 80
+
 if not torch.cuda.is_available():
     raise RuntimeError("CUDA device required for YOLOX")
 
@@ -36,7 +42,6 @@ LOGGER = logging.getLogger(__name__)
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
 # Number of classes in the default COCO-trained YOLOX models.
-YOLOX_NUM_CLASSES = 80
 
 # Mapping of human-readable class names to COCO class IDs. Adjust if using a
 # different dataset.
@@ -176,17 +181,20 @@ def _filter_detections(
     keep_ids: Sequence[int],
 ) -> List[Tuple[List[float], float, int]]:
     """Filter YOLOX detections for selected classes."""
-
     allowed = set(keep_ids)
-    return [
-        (
-            [float(det[0]), float(det[1]), float(det[2]), float(det[3])],
-            float(det[4]),
-            int(det[5]),
+    results: List[Tuple[List[float], float, int]] = []
+    for det in outputs:
+        if len(det) == 6:
+            x1, y1, x2, y2, score, cls_id = det
+        else:
+            x1, y1, x2, y2, obj_conf, cls_conf, cls_id = det
+            score = obj_conf * cls_conf
+        if int(cls_id) not in allowed or float(score) < conf_thr:
+            continue
+        results.append(
+            ([float(x1), float(y1), float(x2), float(y2)], float(score), int(cls_id))
         )
-        for det in outputs
-        if int(det[5]) in allowed and float(det[4]) >= conf_thr
-    ]
+    return results
 
 
 
@@ -211,9 +219,9 @@ def detect_folder(
         model_name: Variant name of the YOLOX model to load.
         img_size: Target input size for the model.
     """
-    model = _load_model(model_name)
     if class_ids is None:
         class_ids = list(range(YOLOX_NUM_CLASSES))
+    model = _load_model(model_name)
     frames = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
@@ -247,14 +255,21 @@ def detect_folder(
             )
 
             det = processed[0] if processed and processed[0] is not None else None
-            outputs_list = det.cpu().tolist() if det is not None else []
+            preds = det.cpu() if det is not None else torch.empty((0, 6))
+            preds_list = preds.tolist()
 
             detections = []
-            for bbox, score, cls in _filter_detections(outputs_list, conf_thres, class_ids):
-                x0 = max((bbox[0] - pad_x) / ratio, 0.0)
-                y0 = max((bbox[1] - pad_y) / ratio, 0.0)
-                x1 = min((bbox[2] - pad_x) / ratio, w0)
-                y1 = min((bbox[3] - pad_y) / ratio, h0)
+            for bbox, score, cls_id in _filter_detections(
+                preds_list, conf_thres, class_ids
+            ):
+                assert 0 <= cls_id < YOLOX_NUM_CLASSES, (
+                    f"Unexpected class id {cls_id}"
+                )
+                x1_p, y1_p, x2_p, y2_p = bbox
+                x0 = max((x1_p - pad_x) / ratio, 0.0)
+                y0 = max((y1_p - pad_y) / ratio, 0.0)
+                x1 = min((x2_p - pad_x) / ratio, w0)
+                y1 = min((y2_p - pad_y) / ratio, h0)
 
                 ix0, iy0, ix1, iy1 = (
                     int(round(x0)),
@@ -267,8 +282,8 @@ def detect_folder(
                     detections.append(
                         {
                             "bbox": [ix0, iy0, ix1, iy1],
-                            "score": score,
-                            "class": cls,
+                            "score": float(score),
+                            "class": int(cls_id),
                         }
                     )
                 else:

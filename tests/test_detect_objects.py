@@ -303,7 +303,13 @@ def test_detect_folder_single_frame(monkeypatch, tmp_path: Path) -> None:
     sys.modules.pop("yolox", None)
 
 
-@pytest.mark.parametrize("rows", [[[0, 0, 1, 1, 0.9, 0]]])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [[0, 0, 1, 1, 0.9, 0]],
+        [[0, 0, 1, 1, 0.9, 0.8, 0]],
+    ],
+)
 def test_filter_cpu(rows) -> None:
     assert dobj._filter_detections(rows, 0.5, [0])
 
@@ -361,6 +367,64 @@ def test_detect_folder_respects_classes(monkeypatch, tmp_path: Path) -> None:
         data = json.load(fh)
 
     assert data[0]["detections"][0]["class"] == 42
+
+    sys.modules.pop("yolox.utils", None)
+    sys.modules.pop("yolox", None)
+
+
+def test_detect_folder_seven_element(monkeypatch, tmp_path: Path) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "img.jpg").write_bytes(b"\x00")
+
+    class FakeDet(list):
+        dtype = "float32"
+
+        def tolist(self):
+            return [list(self)]
+
+        def cpu(self):
+            return self
+
+    class FakeModel:
+        head = types.SimpleNamespace(decode_outputs=lambda o, dtype: o)
+
+        def __call__(self, tensor):
+            return [[FakeDet([0.0, 0.0, 1.0, 1.0, 0.8, 0.9, 1])]]
+
+    monkeypatch.setattr(dobj, "_load_model", lambda *a, **k: FakeModel())
+
+    module = types.ModuleType("yolox")
+    utils_mod = types.ModuleType("utils")
+    utils_mod.postprocess = (
+        lambda outputs, num_classes, conf_thre, nms_thre, class_agnostic=False: [
+            FakeDet([0.0, 0.0, 1.0, 1.0, 0.8, 0.9, 1])
+        ]
+    )
+    module.utils = utils_mod
+    sys.modules["yolox"] = module
+    sys.modules["yolox.utils"] = utils_mod
+
+    class DummyTensor:
+        def unsqueeze(self, dim):
+            return self
+
+        def cuda(self):
+            return self
+
+    monkeypatch.setattr(
+        dobj,
+        "_preprocess_image",
+        lambda p, s: (DummyTensor(), 1.0, 0, 0, 10, 10),
+    )
+
+    out_json = tmp_path / "det.json"
+    dobj.detect_folder(frames, out_json, "yolox-s", 640)
+
+    with out_json.open() as fh:
+        data = json.load(fh)
+
+    assert data[0]["detections"][0]["class"] == 1
 
     sys.modules.pop("yolox.utils", None)
     sys.modules.pop("yolox", None)
