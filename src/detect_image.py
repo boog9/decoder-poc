@@ -58,7 +58,6 @@ def detect_image(
     """Run YOLOX detection on ``image_path``."""
     model = _load_model_device(model_name, device)
     tensor, ratio, pad_x, pad_y, w0, h0 = dobj._preprocess_image(image_path, img_size)
-    tensor = tensor.unsqueeze(0).to(device)
     with torch.no_grad():
         raw = model(tensor)[0]
     if isinstance(raw, list):

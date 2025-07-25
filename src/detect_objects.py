@@ -122,10 +122,11 @@ def _letterbox_image(
 
 def _preprocess_image(
     path: Path, size: int
-) -> tuple[torch.Tensor, float, int, int, int, int]:
+) -> tuple[torch.Tensor, float, float, float, int, int]:
     """Preprocess image using YOLOX's :class:`ValTransform`.
 
-    The returned tensor is ready for model input and the metadata is used for
+    This function mirrors the official YOLOX ``demo.py`` preprocessing. It
+    returns a tensor ready for inference along with metadata required for
     projecting detections back to the original image coordinates.
     """
 
@@ -134,20 +135,22 @@ def _preprocess_image(
 
     img = cv2.imread(str(path))
     if img is None:
-        raise FileNotFoundError(path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        raise FileNotFoundError(f"Cannot read {path}")
+
     h0, w0 = img.shape[:2]
 
-    preproc = ValTransform(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
-    processed, ratio = preproc(img, None, (size, size))
+    preproc = ValTransform(legacy=False)
+    img_processed, _ = preproc(img, None, (size, size))
 
-    tensor = torch.from_numpy(processed).float()
-
-    new_w = int(w0 * ratio)
-    new_h = int(h0 * ratio)
+    _, new_h, new_w = img_processed.shape
     pad_x = (size - new_w) / 2
     pad_y = (size - new_h) / 2
-    return tensor, float(ratio), pad_x, pad_y, w0, h0
+
+    tensor = torch.from_numpy(img_processed).unsqueeze(0).float().cuda()
+
+    ratio = new_w / w0
+
+    return tensor, ratio, pad_x, pad_y, w0, h0
 
 
 def _filter_detections(
@@ -201,7 +204,6 @@ def detect_folder(
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
             tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(frame, img_size)
-            tensor = tensor.unsqueeze(0).cuda()
             with torch.no_grad():
                 raw = model(tensor)[0]
 
