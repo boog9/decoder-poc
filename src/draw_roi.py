@@ -171,15 +171,13 @@ def _color_bgr(name: str) -> Tuple[int, int, int]:
 
 CLASS_NAMES = {
     0: "person",
-    1: "racket",
-    2: "ball",
+    32: "ball",
 }
 
 
 CLASS_COLORS = {
     0: (255, 56, 56),
-    1: (72, 118, 255),
-    2: (0, 255, 0),
+    32: (0, 255, 0),
 }
 
 

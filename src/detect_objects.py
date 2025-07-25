@@ -39,8 +39,7 @@ YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 # different dataset.
 CLASS_MAP = {
     "person": 0,
-    "racket": 1,
-    "ball": 2,
+    "sports ball": 32,
 }
 
 # Map CLI model names to torch.hub callable names.
@@ -102,8 +101,9 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--classes",
         nargs="+",
-        default=list(CLASS_MAP.keys()),
-        help="Classes to detect",
+        type=int,
+        default=list(CLASS_MAP.values()),
+        help="Class IDs to detect",
     )
     return parser.parse_args(argv)
 
@@ -296,11 +296,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
     )
     try:
-        try:
-            class_ids = [CLASS_MAP[c] for c in args.classes]
-        except KeyError as exc:
-            valid = ", ".join(sorted(CLASS_MAP))
-            raise SystemExit(f"Unknown class {exc.args[0]}. Available: {valid}") from exc
+        invalid = [c for c in args.classes if c not in CLASS_MAP.values()]
+        if invalid:
+            valid = ", ".join(str(v) for v in sorted(CLASS_MAP.values()))
+            raise SystemExit(f"Unknown class id {invalid[0]}. Available: {valid}")
         detect_folder(
             args.frames_dir,
             args.output_json,
@@ -308,7 +307,7 @@ def main(argv: Iterable[str] | None = None) -> None:
             args.img_size,
             args.conf_thres,
             args.nms_thres,
-            class_ids,
+            args.classes,
         )
     except Exception as exc:  # pragma: no cover - top level
         LOGGER.exception("Detection failed")
