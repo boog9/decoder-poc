@@ -101,3 +101,8 @@ def test_draw_rois_sanitizes_bbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     dr.draw_rois(frames, det_json, out_dir, 640)
 
     assert (out_dir / "img.jpg").exists()
+
+
+def test_backproject_bbox() -> None:
+    bbox = dr._backproject_bbox((1.0, 1.0, 5.0, 5.0), 0.5, 1.0, 1.0, 10, 10)
+    assert bbox == (0, 0, 8, 8)
