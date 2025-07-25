@@ -155,7 +155,7 @@ python -m src.draw_roi \
 ```
 
 The command reads detection results from ``detections.json`` and writes
-annotated images to ``frames_roi``. Using ``--label`` draws the COCO class name
+annotated PNG images to ``frames_roi``. Using ``--label`` draws the COCO class name
 and confidence score above each box. The bounding box coordinates are expected
 to match the original frame pixels, so no scaling is applied when drawing.
 
