@@ -35,6 +35,9 @@ LOGGER = logging.getLogger(__name__)
 
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
+# Number of classes in the default COCO-trained YOLOX models.
+YOLOX_NUM_CLASSES = 80
+
 # Mapping of human-readable class names to COCO class IDs. Adjust if using a
 # different dataset.
 CLASS_MAP = {
@@ -102,8 +105,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--classes",
         nargs="+",
         type=int,
-        default=list(CLASS_MAP.values()),
-        help="Numeric class IDs to keep (default: person and sports ball)",
+        default=None,
+        help="Numeric class IDs to keep. Defaults to all classes",
     )
     return parser.parse_args(argv)
 
@@ -199,7 +202,8 @@ def detect_folder(
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
-    Only detections for ``person`` or ``sports ball`` are written.
+    If ``class_ids`` is not provided, detections for all YOLOX classes are
+    returned. Otherwise only detections for the specified classes are kept.
 
     Args:
         frames_dir: Directory containing frame images.
@@ -209,7 +213,7 @@ def detect_folder(
     """
     model = _load_model(model_name)
     if class_ids is None:
-        class_ids = list(CLASS_MAP.values())
+        class_ids = list(range(YOLOX_NUM_CLASSES))
     frames = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
