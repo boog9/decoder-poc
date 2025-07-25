@@ -137,5 +137,4 @@ def test_draw_rois_label_coloring(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     expected = dr._label_color(0)
     assert dummy.rectangles[0][2] == expected
     assert dummy.texts
-    assert "person" in dummy.texts[0][0]
-    assert "90%" in dummy.texts[0][0]
+    assert "person:90.0%" in dummy.texts[0][0]

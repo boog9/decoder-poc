@@ -103,7 +103,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         nargs="+",
         type=int,
         default=list(CLASS_MAP.values()),
-        help="Class IDs to detect",
+        help="Numeric class IDs to keep (default: person and sports ball)",
     )
     return parser.parse_args(argv)
 
@@ -199,7 +199,8 @@ def detect_folder(
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
-    Only detections with ``class_ids`` are kept.
+    Only detections with IDs in ``class_ids`` are written. If ``class_ids`` is
+    ``None``, ``[0, 32]`` (``person`` and ``sports ball``) are used.
 
     Args:
         frames_dir: Directory containing frame images.
@@ -209,7 +210,7 @@ def detect_folder(
     """
     model = _load_model(model_name)
     if class_ids is None:
-        class_ids = [CLASS_MAP["person"]]
+        class_ids = list(CLASS_MAP.values())
     frames = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
     )
@@ -296,10 +297,6 @@ def main(argv: Iterable[str] | None = None) -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
     )
     try:
-        invalid = [c for c in args.classes if c not in CLASS_MAP.values()]
-        if invalid:
-            valid = ", ".join(str(v) for v in sorted(CLASS_MAP.values()))
-            raise SystemExit(f"Unknown class id {invalid[0]}. Available: {valid}")
         detect_folder(
             args.frames_dir,
             args.output_json,

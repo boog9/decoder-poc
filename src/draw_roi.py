@@ -169,10 +169,88 @@ def _color_bgr(name: str) -> Tuple[int, int, int]:
     return colors.get(name.lower(), (0, 0, 255))
 
 
-CLASS_NAMES = {
-    0: "person",
-    32: "ball",
-}
+COCO_CLASS_NAMES = (
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "airplane",
+    "bus",
+    "train",
+    "truck",
+    "boat",
+    "traffic light",
+    "fire hydrant",
+    "stop sign",
+    "parking meter",
+    "bench",
+    "bird",
+    "cat",
+    "dog",
+    "horse",
+    "sheep",
+    "cow",
+    "elephant",
+    "bear",
+    "zebra",
+    "giraffe",
+    "backpack",
+    "umbrella",
+    "handbag",
+    "tie",
+    "suitcase",
+    "frisbee",
+    "skis",
+    "snowboard",
+    "sports ball",
+    "kite",
+    "baseball bat",
+    "baseball glove",
+    "skateboard",
+    "surfboard",
+    "tennis racket",
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+    "chair",
+    "couch",
+    "potted plant",
+    "bed",
+    "dining table",
+    "toilet",
+    "tv",
+    "laptop",
+    "mouse",
+    "remote",
+    "keyboard",
+    "cell phone",
+    "microwave",
+    "oven",
+    "toaster",
+    "sink",
+    "refrigerator",
+    "book",
+    "clock",
+    "vase",
+    "scissors",
+    "teddy bear",
+    "hair drier",
+    "toothbrush",
+)
 
 
 CLASS_COLORS = {
@@ -240,10 +318,14 @@ def draw_rois(
                     class_id = det.get("class", -1)
                     score = det.get("score")
                     clr = _label_color(class_id)
-                    class_name = CLASS_NAMES.get(class_id, f"id{class_id}")
-                    text = class_name
-                    if score is not None:
-                        text += f" {int(score * 100)}%"
+                    if 0 <= class_id < len(COCO_CLASS_NAMES):
+                        class_name = COCO_CLASS_NAMES[class_id]
+                    else:
+                        class_name = f"id{class_id}"
+                    if score is None:
+                        text = class_name
+                    else:
+                        text = f"{class_name}:{score * 100:.1f}%"
                     (tw, th), bl = cv2.getTextSize(
                         text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
                     )
