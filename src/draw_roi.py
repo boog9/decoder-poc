@@ -44,7 +44,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--output-dir",
         type=Path,
         required=True,
-        help="Where annotated frames will be written",
+        help="Where annotated PNG frames will be written",
     )
     parser.add_argument(
         "--img-size",
@@ -273,12 +273,12 @@ def draw_rois(
     color: str = "red",
     label: bool = False,
 ) -> None:
-    """Overlay detection ROIs on frames and save to ``output_dir``.
+    """Overlay detection ROIs on frames and save to ``output_dir`` as PNG.
 
     Args:
         frames_dir: Directory of frame images.
         detections_json: JSON file with detection results.
-        output_dir: Destination for annotated images.
+        output_dir: Destination for annotated PNG images.
         img_size: Unused. Present for backwards compatibility.
         color: Outline color for rectangles.
         label: If ``True``, color boxes by class and draw labels with score.
@@ -349,7 +349,8 @@ def draw_rois(
                     "Discarded invalid box %s from %s", [x1, y1, x2, y2], frame_name
                 )
 
-        out_path = output_dir / frame_name
+        out_name = Path(frame_name).with_suffix(".png").name
+        out_path = output_dir / out_name
         cv2.imwrite(str(out_path), img)
         LOGGER.debug("Wrote %s", out_path)
 

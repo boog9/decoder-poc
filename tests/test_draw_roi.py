@@ -88,15 +88,15 @@ def test_draw_rois_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
     frames = tmp_path / "frames"
     frames.mkdir()
-    (frames / "img.jpg").write_bytes(b"\x00")
+    (frames / "img.png").write_bytes(b"\x00")
 
     det_json = tmp_path / "det.json"
-    det_json.write_text('[{"frame": "img.jpg", "detections": [{"bbox": [1, 1, 5, 5]}]}]')
+    det_json.write_text('[{"frame": "img.png", "detections": [{"bbox": [1, 1, 5, 5]}]}]')
 
     out_dir = tmp_path / "out"
     dr.draw_rois(frames, det_json, out_dir, 640, color="blue")
 
-    out_img = out_dir / "img.jpg"
+    out_img = out_dir / "img.png"
     assert out_img.exists()
     assert dummy_cv2.rectangles
 
@@ -106,15 +106,15 @@ def test_draw_rois_sanitizes_bbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     frames = tmp_path / "frames"
     frames.mkdir()
-    (frames / "img.jpg").write_bytes(b"\x00")
+    (frames / "img.png").write_bytes(b"\x00")
 
     det_json = tmp_path / "det.json"
-    det_json.write_text('[{"frame": "img.jpg", "detections": [{"bbox": [5, 5, 1, 1]}]}]')
+    det_json.write_text('[{"frame": "img.png", "detections": [{"bbox": [5, 5, 1, 1]}]}]')
 
     out_dir = tmp_path / "out"
     dr.draw_rois(frames, det_json, out_dir, 640)
 
-    assert (out_dir / "img.jpg").exists()
+    assert (out_dir / "img.png").exists()
 
 
 def test_draw_rois_label_coloring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,11 +123,11 @@ def test_draw_rois_label_coloring(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     frames = tmp_path / "frames"
     frames.mkdir()
-    (frames / "img.jpg").write_bytes(b"\x00")
+    (frames / "img.png").write_bytes(b"\x00")
 
     det_json = tmp_path / "det.json"
     det_json.write_text(
-        '[{"frame": "img.jpg", "detections": [{"bbox": [1, 1, 5, 5], "class": 0, "score": 0.9}]}]'
+        '[{"frame": "img.png", "detections": [{"bbox": [1, 1, 5, 5], "class": 0, "score": 0.9}]}]'
     )
 
     out_dir = tmp_path / "out"
