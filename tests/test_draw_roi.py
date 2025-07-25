@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import sys
 import types
 
@@ -22,91 +21,83 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+cv2_dummy = types.ModuleType("cv2")
+cv2_dummy.imread = lambda path: [[0]]
+cv2_dummy.rectangle = lambda img, pt1, pt2, color, thickness=1: None
+cv2_dummy.imwrite = lambda path, img: True
+sys.modules.setdefault("cv2", cv2_dummy)
 
-class DummyImage:
-    def __init__(self, path: str | None = None):
-        self.path = Path(path) if path else None
+import src.draw_roi as dr  # noqa: E402
 
-    def convert(self, mode: str):
-        return self
 
-    def save(self, path: str | Path) -> None:
+class DummyCV2:
+    def __init__(self) -> None:
+        self.rectangles: list[tuple] = []
+        self.written: list[Path] = []
+
+    @staticmethod
+    def imread(path: str):
+        return [[0]]
+
+    def rectangle(self, img, pt1, pt2, color, thickness=1):
+        self.rectangles.append((pt1, pt2, color, thickness))
+
+    def imwrite(self, path: str, img) -> bool:
         Path(path).write_bytes(b"img")
-
-    @staticmethod
-    def open(path: str | Path):
-        return DummyImage(str(path))
-
-    @staticmethod
-    def new(mode: str, size: tuple[int, int]):
-        return DummyImage()
+        self.written.append(Path(path))
+        return True
 
 
-class DummyDraw:
-    def __init__(self, img: DummyImage):
-        self.img = img
-
-    def rectangle(self, *args, **kwargs):
-        pass
-
-
-pil_mod = types.ModuleType("PIL")
-pil_mod.__path__ = []  # treat as package
-pil_image_mod = types.ModuleType("PIL.Image")
-pil_image_mod.open = DummyImage.open
-pil_image_mod.new = DummyImage.new
-pil_image_mod.Image = DummyImage
-pil_draw_mod = types.ModuleType("PIL.ImageDraw")
-pil_draw_mod.Draw = DummyDraw
-pil_mod.Image = DummyImage
-pil_mod.ImageDraw = pil_draw_mod
-sys.modules["PIL"] = pil_mod
-sys.modules["PIL.Image"] = pil_image_mod
-sys.modules["PIL.ImageDraw"] = pil_draw_mod
-
-from PIL import Image  # type: ignore
-
-import src.draw_roi as dr
+def _setup_cv2(monkeypatch: pytest.MonkeyPatch) -> DummyCV2:
+    dummy = DummyCV2()
+    cv2_mod = types.ModuleType("cv2")
+    cv2_mod.imread = dummy.imread
+    cv2_mod.rectangle = dummy.rectangle
+    cv2_mod.imwrite = dummy.imwrite
+    monkeypatch.setitem(sys.modules, "cv2", cv2_mod)
+    monkeypatch.setattr(dr, "cv2", cv2_mod)
+    return dummy
 
 
 def test_parse_args_defaults() -> None:
-    args = dr.parse_args([
-        "--frames-dir",
-        "frames",
-        "--detections-json",
-        "det.json",
-        "--output-dir",
-        "out",
-    ])
+    args = dr.parse_args(
+        ["--frames-dir", "frames", "--detections-json", "det.json", "--output-dir", "out"]
+    )
+    assert args.img_size == 640
     assert args.color == "red"
 
 
-def test_draw_rois_writes_files(tmp_path: Path) -> None:
+def test_draw_rois_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dummy_cv2 = _setup_cv2(monkeypatch)
+    monkeypatch.setattr(dr, "_preprocess_params", lambda img, size: (1.0, 0.0, 0.0, 10, 10))
+
     frames = tmp_path / "frames"
     frames.mkdir()
-    img_path = frames / "img1.jpg"
-    Image.new("RGB", (10, 10)).save(img_path)
+    (frames / "img.jpg").write_bytes(b"\x00")
+
     det_json = tmp_path / "det.json"
-    det_json.write_text('[{"frame": "img1.jpg", "detections": [{"bbox": [1, 1, 5, 5]}]}]')
+    det_json.write_text('[{"frame": "img.jpg", "detections": [{"bbox": [1, 1, 5, 5]}]}]')
 
     out_dir = tmp_path / "out"
-    dr.draw_rois(frames, det_json, out_dir, color="blue")
+    dr.draw_rois(frames, det_json, out_dir, 640, color="blue")
 
-    out_img = out_dir / "img1.jpg"
-    assert out_img.exists(), "Annotated image was not created"
+    out_img = out_dir / "img.jpg"
+    assert out_img.exists()
+    assert dummy_cv2.rectangles
 
 
-def test_draw_rois_sanitizes_bbox(tmp_path: Path) -> None:
+def test_draw_rois_sanitizes_bbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _setup_cv2(monkeypatch)
+    monkeypatch.setattr(dr, "_preprocess_params", lambda img, size: (1.0, 0.0, 0.0, 10, 10))
+
     frames = tmp_path / "frames"
     frames.mkdir()
-    img_path = frames / "img1.jpg"
-    Image.new("RGB", (10, 10)).save(img_path)
+    (frames / "img.jpg").write_bytes(b"\x00")
+
     det_json = tmp_path / "det.json"
-    det_json.write_text('[{"frame": "img1.jpg", "detections": [{"bbox": [5, 5, 1, 1]}]}]')
+    det_json.write_text('[{"frame": "img.jpg", "detections": [{"bbox": [5, 5, 1, 1]}]}]')
 
     out_dir = tmp_path / "out"
-    # Should not raise even though bbox coordinates are reversed
-    dr.draw_rois(frames, det_json, out_dir)
+    dr.draw_rois(frames, det_json, out_dir, 640)
 
-    out_img = out_dir / "img1.jpg"
-    assert out_img.exists(), "Annotated image was not created"
+    assert (out_dir / "img.jpg").exists()
