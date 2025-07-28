@@ -475,7 +475,9 @@ def track_detections(
         used_dets: set[int] = set()
 
         for obj in online:
-            tlbr = [obj.tlwh[0], obj.tlwh[1], obj.tlwh[0] + obj.tlwh[2], obj.tlwh[1] + obj.tlwh[3]]
+            # Access ByteTrack's internal bounding box representation directly for efficiency
+            x, y, w, h = obj._tlwh  # pylint: disable=protected-access
+            tlbr = [x, y, x + w, y + h]
             best_iou = 0.0
             best_idx: int | None = None
             for idx, det in frame_det_map.items():
