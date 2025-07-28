@@ -28,14 +28,15 @@ from loguru import logger
 import os
 import sys
 
-BYTETRACK_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
+# Location of the vendored ByteTrack package.
+BT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../externals/ByteTrack/bytetrack")
 )
-if BYTETRACK_PATH not in sys.path:
-    sys.path.insert(0, BYTETRACK_PATH)
+if BT_ROOT not in sys.path:
+    sys.path.insert(0, BT_ROOT)
 
 try:  # ByteTrack is optional for unit tests
-    from yolox.tracker.byte_tracker import BYTETracker
+    from bytetrack.tracker.byte_tracker import BYTETracker
 except Exception:  # pragma: no cover - optional dependency
     BYTETracker = None  # type: ignore
 
