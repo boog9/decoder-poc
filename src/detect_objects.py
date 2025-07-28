@@ -35,7 +35,7 @@ if BYTETRACK_PATH not in sys.path:
     sys.path.insert(0, BYTETRACK_PATH)
 
 try:  # ByteTrack is optional for unit tests
-    from tracker.byte_tracker import BYTETracker
+    from yolox.tracker.byte_tracker import BYTETracker
 except Exception:  # pragma: no cover - optional dependency
     BYTETracker = None  # type: ignore
 
