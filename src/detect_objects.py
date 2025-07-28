@@ -28,7 +28,7 @@ from loguru import logger
 import os
 import sys
 
-# Add the ByteTrack repo root so that `bytetrack` package is importable
+# Add the ByteTrack repo root so that ByteTrack’s Python packages are importable
 BT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
@@ -36,8 +36,10 @@ if BT_ROOT not in sys.path:
     sys.path.insert(0, BT_ROOT)
 
 try:  # ByteTrack is optional for unit tests
-    from bytetrack.tracker.byte_tracker import BYTETracker
-except Exception:  # pragma: no cover - optional dependency
+    # ByteTrack stores the tracker code in tracker/byte_tracker.py
+    from tracker.byte_tracker import BYTETracker
+except Exception as exc:  # pragma: no cover - optional dependency
+    logger.error("Could not import BYTETracker: {}", exc)
     BYTETracker = None  # type: ignore
 
 from PIL import Image
@@ -306,7 +308,9 @@ def track_detections(
 
     if BYTETracker is None:
         raise ImportError(
-            "BYTETracker is required. Run 'bash build_externals.sh' to compile it"
+            "BYTETracker import failed. Make sure you have run:\n"
+            "  pip install -r requirements.txt   # adds scipy\n"
+            "  bash build_externals.sh           # compiles yolox C-extension\n"
         )
 
     with detections_json.open() as fh:
