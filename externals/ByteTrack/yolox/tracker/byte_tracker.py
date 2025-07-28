@@ -24,6 +24,11 @@ class STrack:
         self.score = 0.0
         self.track_id = -1
 
+    @property
+    def tlwh(self) -> np.ndarray:
+        """Return the track bounding box as ``(x, y, w, h)``."""
+        return self._tlwh
+
 
 class BYTETracker:
     """Dummy BYTETracker implementation."""
