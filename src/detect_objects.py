@@ -28,9 +28,9 @@ from loguru import logger
 import os
 import sys
 
-# Location of the vendored ByteTrack package.
+# Add the ByteTrack repo root so that "bytetrack" package is importable
 BT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../externals/ByteTrack/bytetrack")
+    os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
 if BT_ROOT not in sys.path:
     sys.path.insert(0, BT_ROOT)
