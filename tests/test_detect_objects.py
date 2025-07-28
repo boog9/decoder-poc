@@ -52,6 +52,8 @@ loguru_mod.logger = types.SimpleNamespace(
     error=lambda *a, **k: None,
 )
 sys.modules.setdefault("loguru", loguru_mod)
+sys.modules.setdefault("scipy", types.ModuleType("scipy"))
+sys.modules.setdefault("scipy.optimize", types.ModuleType("scipy.optimize")).linear_sum_assignment = lambda *a, **k: ([], [])
 
 import src.detect_objects as dobj
 
