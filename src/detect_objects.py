@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence, Dict
 
+from shapely.geometry import box
+
 import numpy as np
 
 from loguru import logger
@@ -204,6 +206,15 @@ def _first_det_for_track(tid: int, frame_id: int) -> dict:
         if det.get("track_id") == tid:
             return det
     return {"class_id": None}
+
+
+def _bbox_iou(b1: Sequence[float], b2: Sequence[float]) -> float:
+    """Return IoU between two bounding boxes."""
+    b1_box = box(*b1)
+    b2_box = box(*b2)
+    inter = b1_box.intersection(b2_box).area
+    union = b1_box.union(b2_box).area
+    return inter / union if union > 0 else 0.0
 
 
 def _load_model(model_name: str):
@@ -456,8 +467,39 @@ def track_detections(
         classes = [d["class"] for d in dets]
         online = _update_tracker(tracker, tlwhs, scores, classes, frame_id)
 
-        for obj, det_idx in zip(online, range(len(dets))):
-            _det_index[(frame_id, det_idx)]["track_id"] = obj.track_id
+        frame_det_map = {
+            idx: det
+            for (fid, idx), det in _det_index.items()
+            if fid == frame_id and "bbox" in det
+        }
+        used_dets: set[int] = set()
+
+        for obj in online:
+            tlbr = [obj.tlwh[0], obj.tlwh[1], obj.tlwh[0] + obj.tlwh[2], obj.tlwh[1] + obj.tlwh[3]]
+            best_iou = 0.0
+            best_idx: int | None = None
+            for idx, det in frame_det_map.items():
+                if idx in used_dets:
+                    continue
+                iou = _bbox_iou(tlbr, det["bbox"])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_idx = idx
+            if best_idx is not None and best_iou > 0.3:
+                _det_index[(frame_id, best_idx)]["track_id"] = obj.track_id
+                used_dets.add(best_idx)
+                LOGGER.debug(
+                    "Assigned track_id %s to det #%s (IoU=%.2f)",
+                    obj.track_id,
+                    best_idx,
+                    best_iou,
+                )
+            else:
+                LOGGER.warning(
+                    "No matching detection found for track %s at frame %s",
+                    obj.track_id,
+                    frame_id,
+                )
 
         for obj in online:
             x, y, w, h = obj.tlwh
