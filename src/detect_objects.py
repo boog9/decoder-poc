@@ -159,8 +159,13 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         # different variants: outputs + img_info + img_size
         if len(params) == 3:
             return tracker.update(dets, img_info, img_size)
-        # len(params) == 2 -> without first arg
-        return tracker.update(img_info, img_size)
+        # len(params) == 2  ➜  дві можливості: (img_info, img_size)  або (dets, img_info)
+        try:
+            # (img_info, img_size)
+            return tracker.update(img_info, img_size)
+        except TypeError:
+            # (dets, img_info)
+            return tracker.update(dets, img_info)
 
     raise RuntimeError(f"Unknown BYTETracker.update signature: {params}")
 
