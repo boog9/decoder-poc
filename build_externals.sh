@@ -15,10 +15,16 @@ set -euo pipefail
 
 # Build C++ extensions for vendored dependencies such as ByteTrack.
 
-pushd "$(dirname "$0")/externals/ByteTrack" >/dev/null
+BYTE_DIR="$(dirname "$0")/externals/ByteTrack"
 
+if [ ! -f "$BYTE_DIR/setup.py" ]; then
+    echo "ByteTrack submodule not found.\n" \
+         "Run 'git submodule update --init --recursive' first." >&2
+    exit 1
+fi
+
+pushd "$BYTE_DIR" >/dev/null
 pip install --user cython pybind11 packaging
 python setup.py build_ext --inplace
-
 popd >/dev/null
 
