@@ -25,20 +25,27 @@ from typing import Iterable, List, Tuple, Sequence, Dict
 
 from loguru import logger
 
+import importlib.util
 import os
 import sys
 
-# Add the ByteTrack repo root so that ByteTrack’s Python packages are importable
+# Locate ``tracker/byte_tracker.py`` in the bundled ByteTrack repository and
+# import ``BYTETracker`` directly from the file. The ByteTrack repo does not
+# provide a standard Python package, so importing by path avoids package hacks.
 BT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
-if BT_ROOT not in sys.path:
-    sys.path.insert(0, BT_ROOT)
+BYTE_TRACKER_PATH = os.path.join(BT_ROOT, "tracker", "byte_tracker.py")
 
 try:  # ByteTrack is optional for unit tests
-    # У корені externals/ByteTrack є каталог ``tracker/``.
-    # Після додавання BT_ROOT у sys.path цього достатньо:
-    from tracker.byte_tracker import BYTETracker
+    spec = importlib.util.spec_from_file_location("byte_tracker", BYTE_TRACKER_PATH)
+    if spec and spec.loader:
+        byte_tracker = importlib.util.module_from_spec(spec)
+        sys.modules["byte_tracker"] = byte_tracker
+        spec.loader.exec_module(byte_tracker)
+        BYTETracker = byte_tracker.BYTETracker  # type: ignore[attr-defined]
+    else:
+        raise ImportError(f"Invalid spec for {BYTE_TRACKER_PATH}")
 except Exception as exc:  # pragma: no cover - optional dependency
     logger.error("Could not import BYTETracker: {}", exc)
     BYTETracker = None  # type: ignore
