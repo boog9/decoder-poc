@@ -29,7 +29,8 @@ if [ ! -f "$BYTE_DIR/setup.py" ]; then
 fi
 
 pushd "$BYTE_DIR" >/dev/null
-pip install --user cython pybind11 packaging
-python setup.py build_ext --inplace
+# Use Python 3 explicitly in Docker since `python` may not be installed.
+python3 -m pip install --user cython pybind11 packaging
+python3 setup.py build_ext --inplace
 popd >/dev/null
 
