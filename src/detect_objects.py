@@ -35,20 +35,13 @@ import sys
 BT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
-BYTE_TRACKER_PATH = os.path.join(BT_ROOT, "tracker", "byte_tracker.py")
-
-try:  # ByteTrack is optional for unit tests
-    spec = importlib.util.spec_from_file_location("byte_tracker", BYTE_TRACKER_PATH)
-    if spec and spec.loader:
-        byte_tracker = importlib.util.module_from_spec(spec)
-        sys.modules["byte_tracker"] = byte_tracker
-        spec.loader.exec_module(byte_tracker)
-        BYTETracker = byte_tracker.BYTETracker  # type: ignore[attr-defined]
-    else:
-        raise ImportError(f"Invalid spec for {BYTE_TRACKER_PATH}")
+if BT_ROOT not in sys.path:
+    sys.path.insert(0, BT_ROOT)
+try:
+    from bytetrack.tracker.byte_tracker import BYTETracker
 except Exception as exc:  # pragma: no cover - optional dependency
     logger.error("Could not import BYTETracker: {}", exc)
-    BYTETracker = None  # type: ignore
+    BYTETracker = None
 
 from PIL import Image
 from tqdm import tqdm
