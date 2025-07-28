@@ -123,3 +123,38 @@ def test_update_tracker_tensor(monkeypatch) -> None:
 
     assert res == ["ok"]
     assert isinstance(tracker.args[0], DummyTensor)
+
+
+def test_update_tracker_output_results_tensor(monkeypatch) -> None:
+    class DummyTensor(list):
+        pass
+
+    class DummyTorch:
+        float32 = "float32"
+
+        def as_tensor(self, arr, dtype=None):
+            return DummyTensor(arr)
+
+    monkeypatch.setattr(dobj, "torch", DummyTorch())
+
+    class DummyTracker:
+        def __init__(self) -> None:
+            self.args = None
+
+        def update(self, output_results, img_info, img_size):
+            assert isinstance(output_results, DummyTensor)
+            self.args = (output_results, img_info, img_size)
+            return ["ok"]
+
+    tracker = DummyTracker()
+
+    res = dobj._update_tracker(
+        tracker,
+        [[0, 0, 10, 20]],
+        [0.9],
+        ["person"],
+        1,
+    )
+
+    assert res == ["ok"]
+    assert isinstance(tracker.args[0], DummyTensor)
