@@ -533,13 +533,15 @@ def track_detections(
     with output_json.open("w") as fh:
         json.dump(output, fh, indent=2)
 
-    logger.info("Processed %d frames", len(frames))
-    logger.info("Active tracks: %d", len(track_ids))
+    logger.info("Processed {} frames", len(frames))
+    logger.info("Active tracks: {}", len(track_ids))
     summary = {}
     for cls in ("person", "ball"):
         summary[cls] = sum(1 for t in output if t["class"] == cls)
-    logger.info("Track summary: %s", summary)
-    logger.info("Saved %d tracked detections to %s", len(output), output_json)
+    logger.info("Track summary: {}", summary)
+    logger.info(
+        "Saved {} tracked detections to {}", len(output), output_json
+    )
 
 
 def main(argv: Iterable[str] | None = None) -> None:
