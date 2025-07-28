@@ -248,6 +248,40 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
     assert out[0]["track_id"] == out[1]["track_id"]
 
 
+def test_track_detections_iou_matching(tmp_path: Path, monkeypatch) -> None:
+    class DummyObj:
+        def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
+            self.track_id = tid
+            self.tlwh = tlwh
+            self.score = score
+
+    class DummyTracker:
+        def update(self, tlwhs, scores, classes, frame_id):
+            return [DummyObj(5, tlwhs[1], scores[1])]
+
+    monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+
+    det_json = tmp_path / "det.json"
+    det_json.write_text(
+        json.dumps(
+            [
+                {
+                    "frame": "f1.png",
+                    "detections": [
+                        {"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0},
+                        {"bbox": [10, 10, 12, 12], "score": 0.8, "class": 0},
+                    ],
+                }
+            ]
+        )
+    )
+    out_json = tmp_path / "out.json"
+    dobj.track_detections(det_json, out_json, 0.3)
+
+    assert dobj._det_index[(1, 1)]["track_id"] == 5
+    assert "track_id" not in dobj._det_index[(1, 0)]
+
+
 def test_update_tracker_mot_two_params() -> None:
     class DummyTracker:
         def __init__(self) -> None:
