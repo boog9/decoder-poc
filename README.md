@@ -21,6 +21,19 @@ Example output:
 
 The script requires FFmpeg to be installed and available on the system path.
 
+When cloning the repository make sure to also fetch the ``ByteTrack``
+submodule:
+
+```bash
+git clone --recursive <repo-url>
+```
+
+If the repository was cloned without ``--recursive`` run:
+
+```bash
+git submodule update --init --recursive
+```
+
 ## Setup
 
 Install the system dependencies and Python packages, then fetch the
