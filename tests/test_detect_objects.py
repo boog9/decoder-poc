@@ -56,7 +56,12 @@ sys.modules.setdefault("scipy", types.ModuleType("scipy"))
 sys.modules.setdefault("scipy.optimize", types.ModuleType("scipy.optimize")).linear_sum_assignment = lambda *a, **k: ([], [])
 # dummy ByteTrack module for dynamic import
 bt_mod = types.ModuleType("yolox.tracker.byte_tracker")
-setattr(bt_mod, "BYTETracker", object)
+
+class _DummyBT:
+    def __init__(self, *a, **k):
+        pass
+
+setattr(bt_mod, "BYTETracker", _DummyBT)
 sys.modules.setdefault("yolox", types.ModuleType("yolox"))
 sys.modules.setdefault("yolox.tracker", types.ModuleType("yolox.tracker"))
 sys.modules["yolox.tracker.byte_tracker"] = bt_mod
