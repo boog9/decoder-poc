@@ -70,7 +70,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for detection and tracking."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", required=False)
 
     # Detection subcommand (default)
     det = sub.add_parser("detect", help="Run YOLOX detection")
@@ -88,9 +88,13 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument("--output-json", type=Path, required=True)
     tr.add_argument("--min-score", type=float, default=0.3)
 
-    if argv and argv[0] in {"detect", "track"}:
-        return parser.parse_args(argv)
-    return parser.parse_args(["detect"] + ([] if argv is None else list(argv)))
+    # Parse provided arguments or ``sys.argv`` when ``argv`` is ``None``.
+    args = parser.parse_args(argv)
+
+    # Default to ``detect`` when no subcommand is supplied.
+    if args.command is None:
+        args.command = "detect"
+    return args
 
 
 def _load_model(model_name: str):

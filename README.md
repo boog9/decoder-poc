@@ -91,14 +91,29 @@ numeric class IDs. If omitted, detections for all classes are kept. For
 example, ``--classes 0 32`` keeps only ``person`` and ``sports ball``.
 
 ```bash
+# 1) Явно з detect
+python -m src.detect_objects detect \
+  --frames-dir    ./frames \
+  --output-json   detections.json \
+  --model         yolox-x \
+  --img-size      1280 \
+  --conf-thres    0.1 \
+  --nms-thres     0.1
+
+# 2) Без сабкоманди (виконання detect за замовчуванням)
 python -m src.detect_objects \
-    --frames-dir frames/ \
-    --output-json detections.json \
-    --model yolox-s \
-    --img-size 640 \
-    --conf-thres 0.30 \
-    --nms-thres 0.45 \
-    --classes 0 32
+  --frames-dir    ./frames \
+  --output-json   detections.json \
+  --model         yolox-x \
+  --img-size      1280 \
+  --conf-thres    0.1 \
+  --nms-thres     0.1
+
+# 3) Трекінг
+python -m src.detect_objects track \
+  --detections-json detections.json \
+  --output-json     tracks.json \
+  --min-score       0.3
 ```
 
 To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
