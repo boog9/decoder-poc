@@ -54,6 +54,12 @@ loguru_mod.logger = types.SimpleNamespace(
 sys.modules.setdefault("loguru", loguru_mod)
 sys.modules.setdefault("scipy", types.ModuleType("scipy"))
 sys.modules.setdefault("scipy.optimize", types.ModuleType("scipy.optimize")).linear_sum_assignment = lambda *a, **k: ([], [])
+np_mod = types.ModuleType("numpy")
+np_mod.array = lambda a, dtype=None: a
+np_mod.asarray = lambda a, dtype=None: a
+np_mod.concatenate = lambda arrs, axis=0: sum(arrs, [])
+np_mod.float32 = "float32"
+sys.modules.setdefault("numpy", np_mod)
 # dummy ByteTrack module for dynamic import
 bt_mod = types.ModuleType("yolox.tracker.byte_tracker")
 
@@ -222,6 +228,7 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
             return out
 
     monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    monkeypatch.setattr(dobj, "_update_tracker", lambda t, a, b, c, d: t.update(a, b, c, d))
 
     det_json = tmp_path / "det.json"
     det_json.write_text(

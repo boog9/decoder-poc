@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence, Dict
 
+import numpy as np
+
 from loguru import logger
 import os
 import sys
@@ -77,6 +79,9 @@ _YOLOX_MODEL_MAP = {
     "yolox-x": "yolox_x",
 }
 
+# Index of detections by (frame_id, detection_idx) for tracking.
+_det_index: dict[tuple[int, int], dict] = {}
+
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for detection and tracking."""
@@ -107,6 +112,38 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     if args.command is None:
         args.command = "detect"
     return args
+
+
+def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
+    """Call ``tracker.update`` with a compatible signature."""
+
+    sig = inspect.signature(tracker.update)
+    params = list(sig.parameters)[1:]
+
+    if params == ["tlwhs", "scores", "classes", "frame_id"]:
+        return tracker.update(tlwhs, scores, classes, frame_id)
+
+    if params == ["tlwhs", "scores", "frame_id"]:
+        return tracker.update(tlwhs, scores, frame_id)
+
+    if params == ["dets", "frame_id"]:
+        cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
+        dets = np.concatenate(
+            [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
+            axis=1,
+        )
+        return tracker.update(dets, frame_id)
+
+    raise RuntimeError(f"Unknown BYTETracker.update signature: {params}")
+
+
+def _first_det_for_track(tid: int, frame_id: int) -> dict:
+    """Return first detection dict for ``tid``."""
+
+    for (fid, _), det in _det_index.items():
+        if det.get("track_id") == tid:
+            return det
+    return {"class_id": None}
 
 
 def _load_model(model_name: str):
@@ -316,9 +353,10 @@ def track_detections(
     with detections_json.open() as fh:
         raw = json.load(fh)
 
+    _det_index.clear()
     frames: Dict[int, list[dict]] = {}
     for idx, frame_obj in enumerate(sorted(raw, key=lambda x: x["frame"]), start=1):
-        for det in frame_obj.get("detections", []):
+        for det_idx, det in enumerate(frame_obj.get("detections", [])):
             cls_id = det.get("class")
             if cls_id == CLASS_MAP["person"]:
                 cls = "person"
@@ -329,9 +367,9 @@ def track_detections(
             score = float(det.get("score", 0.0))
             if score < min_score:
                 continue
-            frames.setdefault(idx, []).append(
-                {"bbox": det["bbox"], "score": score, "class": cls}
-            )
+            d = {"bbox": det["bbox"], "score": score, "class": cls, "class_id": cls_id}
+            frames.setdefault(idx, []).append(d)
+            _det_index[(idx, det_idx)] = d
 
     # Create tracker instance. ByteTrack's constructor differs between
     # the PyPI distribution and the upstream repository. Inspect the
@@ -356,14 +394,30 @@ def track_detections(
         tlwhs = [[b[0], b[1], b[2] - b[0], b[3] - b[1]] for b in (d["bbox"] for d in dets)]
         scores = [d["score"] for d in dets]
         classes = [d["class"] for d in dets]
-        online = tracker.update(tlwhs, scores, classes, frame_id)
-        for obj, cls in zip(online, classes):
+        online = _update_tracker(tracker, tlwhs, scores, classes, frame_id)
+
+        for obj, det_idx in zip(online, range(len(dets))):
+            _det_index[(frame_id, det_idx)]["track_id"] = obj.track_id
+
+        for obj in online:
             x, y, w, h = obj.tlwh
+
+            cls_idx = getattr(obj, "cls", getattr(obj, "class_id", None))
+            if cls_idx is None:
+                det = _first_det_for_track(obj.track_id, frame_id)
+                cls_idx = det["class_id"]
+
+            cls_name = (
+                "person" if cls_idx == CLASS_MAP["person"]
+                else "ball" if cls_idx == CLASS_MAP["sports ball"]
+                else "unknown"
+            )
+
             bbox = [int(x), int(y), int(x + w), int(y + h)]
             output.append(
                 {
                     "frame": frame_id,
-                    "class": cls,
+                    "class": cls_name,
                     "track_id": obj.track_id,
                     "bbox": bbox,
                     "score": float(obj.score),
