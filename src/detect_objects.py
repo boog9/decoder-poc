@@ -141,6 +141,20 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         )
         return tracker.update(dets, frame_id)
 
+    if params == ["output_results", "img_info", "img_size"]:
+        cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
+        dets = np.concatenate(
+            [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
+            axis=1,
+        )
+
+        im_w = max(b[0] + b[2] for b in tlwhs) if tlwhs else 1920
+        im_h = max(b[1] + b[3] for b in tlwhs) if tlwhs else 1080
+        img_info = (im_h, im_w, 1.0)
+        img_size = (im_w, im_h)
+
+        return tracker.update(dets, img_info, img_size)
+
     # --- version with MOT style arguments --------------------------------
     if {"img_info", "img_size"} & set(params):
         cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
