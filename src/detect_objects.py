@@ -126,13 +126,40 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
     if params == ["tlwhs", "scores", "frame_id"]:
         return tracker.update(tlwhs, scores, frame_id)
 
+
     if params == ["dets", "frame_id"]:
+        cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
+        dets = np.concatenate(
+            [
+                np.asarray(tlwhs, dtype=np.float32),
+                np.asarray(scores, dtype=np.float32)[:, None],
+                cls_arr,
+            ],
+            axis=1,
+        )
+        return tracker.update(dets, frame_id)
+
+    # --- version with 2-3 parameters MOT style ----------------------------
+    if "img_info" in params:
+        # ➊ Gather detections as expected by original ByteTrack:
+        #    [x1, y1, x2, y2, score, class_id]
         cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
             axis=1,
         )
-        return tracker.update(dets, frame_id)
+
+        # ➋ Roughly estimate frame size (or pass a tuple unused by tracker)
+        im_w = max(b[0] + b[2] for b in tlwhs) if tlwhs else 1920
+        im_h = max(b[1] + b[3] for b in tlwhs) if tlwhs else 1080
+        img_info = (im_h, im_w, 1.0)  # (h, w, scale)
+        img_size = (im_w, im_h)
+
+        # different variants: outputs + img_info + img_size
+        if len(params) == 3:
+            return tracker.update(dets, img_info, img_size)
+        # len(params) == 2 -> without first arg
+        return tracker.update(img_info, img_size)
 
     raise RuntimeError(f"Unknown BYTETracker.update signature: {params}")
 

@@ -228,7 +228,6 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
             return out
 
     monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
-    monkeypatch.setattr(dobj, "_update_tracker", lambda t, a, b, c, d: t.update(a, b, c, d))
 
     det_json = tmp_path / "det.json"
     det_json.write_text(
@@ -247,6 +246,51 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
 
     assert len(out) == 2
     assert out[0]["track_id"] == out[1]["track_id"]
+
+
+def test_update_tracker_mot_two_params() -> None:
+    class DummyTracker:
+        def __init__(self) -> None:
+            self.args = None
+
+        def update(self, img_info, img_size):
+            self.args = (img_info, img_size)
+            return ["ok"]
+
+    tracker = DummyTracker()
+    res = dobj._update_tracker(
+        tracker,
+        [[0, 0, 10, 20]],
+        [0.9],
+        ["person"],
+        1,
+    )
+
+    assert res == ["ok"]
+    assert tracker.args == ((20, 10, 1.0), (10, 20))
+
+
+def test_update_tracker_mot_three_params() -> None:
+    class DummyTracker:
+        def __init__(self) -> None:
+            self.args = None
+
+        def update(self, outputs, img_info, img_size):
+            self.args = (outputs, img_info, img_size)
+            return ["ok"]
+
+    tracker = DummyTracker()
+    res = dobj._update_tracker(
+        tracker,
+        [[0, 0, 10, 20]],
+        [0.9],
+        ["person"],
+        1,
+    )
+
+    assert res == ["ok"]
+    assert tracker.args[1:] == ((20, 10, 1.0), (10, 20))
+    assert tracker.args[0][0][:4] == [0, 0, 10, 20]
 
 
 
