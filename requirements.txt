@@ -12,3 +12,5 @@ scipy>=1.11        # needed by tracker.byte_tracker fallback
 # C-extension, needed for yolox.tracker.byte_tracker
 lap>=0.4
 cython_bbox>=0.1.3
+# потрібен для сумісності з setuptools>=80
+packaging>=23.2
