@@ -24,14 +24,12 @@ from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence, Dict
 
 from loguru import logger
-
-import importlib.util
 import os
 import sys
 
-# Locate the vendored ByteTrack repository and import ``BYTETracker`` from the
-# YOLOX-style package layout. The repository lives in ``externals/ByteTrack``
-# and exposes ``yolox.tracker.byte_tracker``.
+# Add ByteTrack root to ``sys.path`` once and import ``BYTETracker`` normally.
+# The tracker module lives under ``yolox.tracker.byte_tracker`` in the bundled
+# repository at ``externals/ByteTrack``.
 BT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
