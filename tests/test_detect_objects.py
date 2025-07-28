@@ -316,6 +316,29 @@ def test_update_tracker_mot_two_params_dets_img_info() -> None:
     assert tracker.args[0][0][:4] == [0, 0, 10, 20]
 
 
+def test_update_tracker_mot_two_params_dets_img_size() -> None:
+    class DummyTracker:
+        def __init__(self) -> None:
+            self.args = None
+
+        def update(self, dets, img_size):
+            self.args = (dets, img_size)
+            return ["ok"]
+
+    tracker = DummyTracker()
+    res = dobj._update_tracker(
+        tracker,
+        [[0, 0, 10, 20]],
+        [0.9],
+        ["person"],
+        1,
+    )
+
+    assert res == ["ok"]
+    assert tracker.args[1] == (10, 20)
+    assert tracker.args[0][0][:4] == [0, 0, 10, 20]
+
+
 
 
 def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
