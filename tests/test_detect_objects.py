@@ -54,10 +54,12 @@ loguru_mod.logger = types.SimpleNamespace(
 sys.modules.setdefault("loguru", loguru_mod)
 sys.modules.setdefault("scipy", types.ModuleType("scipy"))
 sys.modules.setdefault("scipy.optimize", types.ModuleType("scipy.optimize")).linear_sum_assignment = lambda *a, **k: ([], [])
-# dummy byte_tracker module for dynamic import
-bt_mod = types.ModuleType("byte_tracker")
+# dummy ByteTrack module for dynamic import
+bt_mod = types.ModuleType("yolox.tracker.byte_tracker")
 setattr(bt_mod, "BYTETracker", object)
-sys.modules["byte_tracker"] = bt_mod
+sys.modules.setdefault("yolox", types.ModuleType("yolox"))
+sys.modules.setdefault("yolox.tracker", types.ModuleType("yolox.tracker"))
+sys.modules["yolox.tracker.byte_tracker"] = bt_mod
 
 import src.detect_objects as dobj
 

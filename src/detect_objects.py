@@ -29,16 +29,16 @@ import importlib.util
 import os
 import sys
 
-# Locate ``tracker/byte_tracker.py`` in the bundled ByteTrack repository and
-# import ``BYTETracker`` directly from the file. The ByteTrack repo does not
-# provide a standard Python package, so importing by path avoids package hacks.
+# Locate the vendored ByteTrack repository and import ``BYTETracker`` from the
+# YOLOX-style package layout. The repository lives in ``externals/ByteTrack``
+# and exposes ``yolox.tracker.byte_tracker``.
 BT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
 if BT_ROOT not in sys.path:
     sys.path.insert(0, BT_ROOT)
 try:
-    from bytetrack.tracker.byte_tracker import BYTETracker
+    from yolox.tracker.byte_tracker import BYTETracker
 except Exception as exc:  # pragma: no cover - optional dependency
     logger.error("Could not import BYTETracker: {}", exc)
     BYTETracker = None
