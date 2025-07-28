@@ -54,6 +54,14 @@ loguru_mod.logger = types.SimpleNamespace(
 sys.modules.setdefault("loguru", loguru_mod)
 sys.modules.setdefault("scipy", types.ModuleType("scipy"))
 sys.modules.setdefault("scipy.optimize", types.ModuleType("scipy.optimize")).linear_sum_assignment = lambda *a, **k: ([], [])
+# dummy bytetrack + tracker.byte_tracker
+bt_mod = types.ModuleType("bytetrack")
+sys.modules["bytetrack"] = bt_mod
+# expose root-level tracker
+tracker_mod = types.ModuleType("tracker")
+sys.modules["tracker"] = tracker_mod
+tracker_mod.byte_tracker = types.ModuleType("tracker.byte_tracker")
+setattr(tracker_mod.byte_tracker, "BYTETracker", object)
 
 import src.detect_objects as dobj
 
