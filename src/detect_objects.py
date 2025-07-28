@@ -21,7 +21,14 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Iterable, List, Tuple, Sequence
+from typing import Iterable, List, Tuple, Sequence, Dict
+
+from loguru import logger
+
+try:  # ByteTrack is optional for unit tests
+    from bytetrack import BYTETracker
+except Exception:  # pragma: no cover - optional dependency
+    BYTETracker = None  # type: ignore
 
 from PIL import Image
 from tqdm import tqdm
@@ -60,60 +67,30 @@ _YOLOX_MODEL_MAP = {
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    """Parse CLI arguments for :mod:`detect_objects`.
+    """Parse CLI arguments for detection and tracking."""
 
-    Args:
-        argv: Optional list of command line arguments.
-
-    Returns:
-        Parsed arguments namespace.
-    """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--frames-dir",
-        type=Path,
-        required=True,
-        help="Directory of input frames",
-    )
-    parser.add_argument(
-        "--output-json",
-        type=Path,
-        required=True,
-        help="Path to write detections JSON",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="yolox-s",
-        choices=sorted(YOLOX_MODELS),
-        help="YOLOX model variant",
-    )
-    parser.add_argument(
-        "--img-size",
-        type=int,
-        default=640,
-        help="Resize frames to this square size before detection.",
-    )
-    parser.add_argument(
-        "--conf-thres",
-        type=float,
-        default=0.3,
-        help="Confidence threshold for detections (default: 0.3)",
-    )
-    parser.add_argument(
-        "--nms-thres",
-        type=float,
-        default=0.45,
-        help="IoU threshold for non-max suppression (default: 0.45)",
-    )
-    parser.add_argument(
-        "--classes",
-        nargs="+",
-        type=int,
-        default=None,
-        help="Numeric class IDs to keep. Defaults to all classes",
-    )
-    return parser.parse_args(argv)
+    sub = parser.add_subparsers(dest="command")
+
+    # Detection subcommand (default)
+    det = sub.add_parser("detect", help="Run YOLOX detection")
+    det.add_argument("--frames-dir", type=Path, required=True)
+    det.add_argument("--output-json", type=Path, required=True)
+    det.add_argument("--model", type=str, default="yolox-s", choices=sorted(YOLOX_MODELS))
+    det.add_argument("--img-size", type=int, default=640)
+    det.add_argument("--conf-thres", type=float, default=0.3)
+    det.add_argument("--nms-thres", type=float, default=0.45)
+    det.add_argument("--classes", nargs="+", type=int, default=None)
+
+    # Tracking subcommand
+    tr = sub.add_parser("track", help="Run ByteTrack on YOLOX detections")
+    tr.add_argument("--detections-json", type=Path, required=True)
+    tr.add_argument("--output-json", type=Path, required=True)
+    tr.add_argument("--min-score", type=float, default=0.3)
+
+    if argv and argv[0] in {"detect", "track"}:
+        return parser.parse_args(argv)
+    return parser.parse_args(["detect"] + ([] if argv is None else list(argv)))
 
 
 def _load_model(model_name: str):
@@ -308,25 +285,99 @@ def detect_folder(
         json.dump(out, f, indent=2)
 
 
+def track_detections(
+    detections_json: Path, output_json: Path, min_score: float = 0.3
+) -> None:
+    """Run ByteTrack on detection results and write tracks."""
+
+    if BYTETracker is None:
+        raise ImportError(
+            "BYTETracker is required. Install with 'pip install bytetrack'"
+        )
+
+    with detections_json.open() as fh:
+        raw = json.load(fh)
+
+    frames: Dict[int, list[dict]] = {}
+    for idx, frame_obj in enumerate(sorted(raw, key=lambda x: x["frame"]), start=1):
+        for det in frame_obj.get("detections", []):
+            cls_id = det.get("class")
+            if cls_id == CLASS_MAP["person"]:
+                cls = "person"
+            elif cls_id == CLASS_MAP["sports ball"]:
+                cls = "ball"
+            else:
+                continue
+            score = float(det.get("score", 0.0))
+            if score < min_score:
+                continue
+            frames.setdefault(idx, []).append(
+                {"bbox": det["bbox"], "score": score, "class": cls}
+            )
+
+    tracker = BYTETracker(track_thresh=min_score, frame_rate=30)
+    output: list[dict] = []
+    track_ids = set()
+    for frame_id in sorted(frames):
+        dets = frames[frame_id]
+        tlwhs = [[b[0], b[1], b[2] - b[0], b[3] - b[1]] for b in (d["bbox"] for d in dets)]
+        scores = [d["score"] for d in dets]
+        classes = [d["class"] for d in dets]
+        online = tracker.update(tlwhs, scores, classes, frame_id)
+        for obj, cls in zip(online, classes):
+            x, y, w, h = obj.tlwh
+            bbox = [int(x), int(y), int(x + w), int(y + h)]
+            output.append(
+                {
+                    "frame": frame_id,
+                    "class": cls,
+                    "track_id": obj.track_id,
+                    "bbox": bbox,
+                    "score": float(obj.score),
+                }
+            )
+            track_ids.add(obj.track_id)
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    with output_json.open("w") as fh:
+        json.dump(output, fh, indent=2)
+
+    logger.info("Processed %d frames", len(frames))
+    logger.info("Active tracks: %d", len(track_ids))
+    summary = {}
+    for cls in ("person", "ball"):
+        summary[cls] = sum(1 for t in output if t["class"] == cls)
+    logger.info("Track summary: %s", summary)
+    logger.info("Saved %d tracked detections to %s", len(output), output_json)
+
+
 def main(argv: Iterable[str] | None = None) -> None:
     """CLI entrypoint."""
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
     )
-    try:
-        detect_folder(
-            args.frames_dir,
-            args.output_json,
-            args.model,
-            args.img_size,
-            args.conf_thres,
-            args.nms_thres,
-            args.classes,
-        )
-    except Exception as exc:  # pragma: no cover - top level
-        LOGGER.exception("Detection failed")
-        raise SystemExit(1) from exc
+
+    if args.command == "track":
+        try:
+            track_detections(args.detections_json, args.output_json, args.min_score)
+        except Exception as exc:  # pragma: no cover - top level
+            logger.exception("Tracking failed")
+            raise SystemExit(1) from exc
+    else:
+        try:
+            detect_folder(
+                args.frames_dir,
+                args.output_json,
+                args.model,
+                args.img_size,
+                args.conf_thres,
+                args.nms_thres,
+                args.classes,
+            )
+        except Exception as exc:  # pragma: no cover - top level
+            LOGGER.exception("Detection failed")
+            raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":  # pragma: no cover
