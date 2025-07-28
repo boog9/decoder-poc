@@ -36,7 +36,9 @@ if BT_ROOT not in sys.path:
     sys.path.insert(0, BT_ROOT)
 
 try:  # ByteTrack is optional for unit tests
-    # ByteTrack stores the tracker code in tracker/byte_tracker.py
+    # 1) import the ``bytetrack`` package so it appends the repo root to ``sys.path``
+    import bytetrack  # noqa: F401
+    # 2) now we can load ``BYTETracker`` from ``tracker.byte_tracker``
     from tracker.byte_tracker import BYTETracker
 except Exception as exc:  # pragma: no cover - optional dependency
     logger.error("Could not import BYTETracker: {}", exc)
