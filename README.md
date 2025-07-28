@@ -142,6 +142,35 @@ This image installs YOLOX and its dependencies using the official
 PyTorch with GPU support. The YOLOX package is installed directly from the
 GitHub repository to avoid issues with the PyPI release.
 
+## Object Tracking CLI
+
+After running detection you can generate consistent tracks for each
+``person`` and ``ball`` class using ByteTrack. Only detections with score
+above ``--min-score`` are considered.
+
+```bash
+python -m src.detect_objects track \
+    --detections-json detections.json \
+    --output-json tracks.json \
+    --min-score 0.30
+```
+
+* ``--detections-json`` – input file produced by the detection step.
+* ``--output-json`` – destination for the tracked results.
+* ``--min-score`` – detection score threshold (default: ``0.3``).
+
+The output ``tracks.json`` contains entries of the form:
+
+```json
+[
+  {"frame": 1, "class": "person", "track_id": 5, "bbox": [x1, y1, x2, y2], "score": 0.93},
+  {"frame": 1, "class": "ball",   "track_id": 2, "bbox": [x1, y1, x2, y2], "score": 0.88}
+]
+```
+
+The command logs the number of processed frames, the count of active tracks
+and a per-class summary.
+
 ## ROI Visualization CLI
 
 Overlay detection bounding boxes on extracted frames.

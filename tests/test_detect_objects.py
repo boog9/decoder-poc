@@ -44,6 +44,14 @@ class _DummyTqdm:
 
 
 sys.modules.setdefault("tqdm", types.ModuleType("tqdm")).tqdm = _DummyTqdm
+loguru_mod = types.ModuleType("loguru")
+loguru_mod.logger = types.SimpleNamespace(
+    info=lambda *a, **k: None,
+    debug=lambda *a, **k: None,
+    warning=lambda *a, **k: None,
+    error=lambda *a, **k: None,
+)
+sys.modules.setdefault("loguru", loguru_mod)
 
 import src.detect_objects as dobj
 
@@ -174,6 +182,51 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
 
     sys.modules.pop("yolox.utils", None)
     sys.modules.pop("yolox", None)
+
+
+def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
+    class DummyObj:
+        def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
+            self.track_id = tid
+            self.tlwh = tlwh
+            self.score = score
+
+    class DummyTracker:
+        def __init__(self, *a, **k) -> None:
+            self.last: dict[tuple[float, float, float, float], int] = {}
+            self.next_id = 1
+
+        def update(self, tlwhs, scores, classes, frame_id):
+            out = []
+            for tlwh, score in zip(tlwhs, scores):
+                key = tuple(tlwh)
+                tid = self.last.get(key)
+                if tid is None:
+                    tid = self.next_id
+                    self.next_id += 1
+                    self.last[key] = tid
+                out.append(DummyObj(tid, tlwh, score))
+            return out
+
+    monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+
+    det_json = tmp_path / "det.json"
+    det_json.write_text(
+        json.dumps(
+            [
+                {"frame": "f1.png", "detections": [{"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0}]},
+                {"frame": "f2.png", "detections": [{"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0}]},
+            ]
+        )
+    )
+    out_json = tmp_path / "out.json"
+    dobj.track_detections(det_json, out_json, 0.3)
+
+    with out_json.open() as fh:
+        out = json.load(fh)
+
+    assert len(out) == 2
+    assert out[0]["track_id"] == out[1]["track_id"]
 
 
 

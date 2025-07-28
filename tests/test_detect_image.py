@@ -38,6 +38,14 @@ sys.modules.setdefault("torchvision", tv_mod)
 sys.modules.setdefault("torchvision.transforms", transforms_mod)
 sys.modules.setdefault("torchvision.transforms.functional", functional_mod)
 sys.modules.setdefault("tqdm", types.ModuleType("tqdm")).tqdm = lambda *a, **k: a[0] if a else None
+loguru_mod = types.ModuleType("loguru")
+loguru_mod.logger = types.SimpleNamespace(
+    info=lambda *a, **k: None,
+    debug=lambda *a, **k: None,
+    warning=lambda *a, **k: None,
+    error=lambda *a, **k: None,
+)
+sys.modules.setdefault("loguru", loguru_mod)
 pil_mod = types.ModuleType("PIL")
 pil_mod.__path__ = []
 pil_image_mod = types.ModuleType("PIL.Image")
