@@ -23,11 +23,26 @@ The script requires FFmpeg to be installed and available on the system path.
 
 ## Setup
 
-Install the required Python packages and run tests:
+Install the system dependencies and Python packages, then fetch the
+``ByteTrack`` submodule and build its native extensions.
 
 ```bash
-python -m pip install -U -r requirements.txt
+sudo apt update
+sudo apt install -y build-essential cmake ninja-build libopencv-dev python3-dev
+git submodule update --init --recursive
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+bash build_externals.sh
 make test
+```
+
+### External Dependencies
+
+Build the vendored ByteTrack tracker:
+
+```bash
+git submodule update --init --recursive
+bash build_externals.sh
 ```
 
 Build the Docker image (requires NVIDIA GPU drivers):
@@ -160,8 +175,9 @@ GitHub repository to avoid issues with the PyPI release.
 ## Object Tracking CLI
 
 After running detection you can generate consistent tracks for each
-``person`` and ``ball`` class using ByteTrack. Only detections with score
-above ``--min-score`` are considered.
+``person`` and ``ball`` class using ByteTrack. The tracker is vendored in
+``externals/ByteTrack`` and must be built via ``build_externals.sh``.
+Only detections with score above ``--min-score`` are considered.
 
 ```bash
 python -m src.detect_objects track \
