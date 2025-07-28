@@ -153,14 +153,8 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         img_info = (im_h, im_w, 1.0)
         img_size = (im_w, im_h)
 
-        if torch is not None:
-            try:
-                dets_tensor = torch.as_tensor(dets, dtype=torch.float32)
-                return tracker.update(dets_tensor, img_info, img_size)
-            except Exception:
-                pass
-
-        return tracker.update(dets, img_info, img_size)
+        dets_tensor = torch.as_tensor(dets, dtype=torch.float32)
+        return tracker.update(dets_tensor, img_info, img_size)
 
     # --- version with MOT style arguments --------------------------------
     if {"img_info", "img_size"} & set(params):
