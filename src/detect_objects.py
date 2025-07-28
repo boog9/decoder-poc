@@ -119,7 +119,9 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
     """Call ``tracker.update`` with a compatible signature."""
 
     sig = inspect.signature(tracker.update)
-    params = list(sig.parameters)[1:]
+    params = list(sig.parameters)
+    if params and params[0] == "self":
+        params = params[1:]
 
     if params == ["tlwhs", "scores", "classes", "frame_id"]:
         return tracker.update(tlwhs, scores, classes, frame_id)
@@ -152,16 +154,29 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         img_info = (im_h, im_w, 1.0)
         img_size = (im_w, im_h)
 
-        # Try common calling conventions for different ByteTrack versions.
-        for args in [
-            (dets, img_info, img_size),
-            (img_info, img_size),
-            (dets, img_info),
-            (dets, img_size),
-        ]:
+        tensor_dets = None
+        if torch:
+            try:
+                tensor_dets = torch.as_tensor(dets, dtype=torch.float32)
+            except Exception:  # pragma: no cover - optional torch
+                tensor_dets = None
+
+        candidates = []
+        if tensor_dets is not None and len(params) == 3:
+            candidates.append((tensor_dets, img_info, img_size))
+        candidates.extend(
+            [
+                (dets, img_info, img_size),
+                (img_info, img_size),
+                (dets, img_info),
+                (dets, img_size),
+            ]
+        )
+
+        for args in candidates:
             try:
                 return tracker.update(*args)
-            except TypeError:
+            except (TypeError, AttributeError):
                 continue
 
     raise RuntimeError(f"Unknown BYTETracker.update signature: {params}")
