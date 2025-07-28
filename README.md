@@ -45,6 +45,7 @@ sudo apt install -y build-essential cmake ninja-build libopencv-dev python3-dev
 git submodule update --init --recursive
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt
+python -m pip install pytest
 bash build_externals.sh
 make test
 ```
@@ -57,6 +58,28 @@ Build the vendored ByteTrack tracker:
 git submodule update --init --recursive
 bash build_externals.sh
 ```
+
+If `build_externals.sh` exits with the message:
+
+```
+ByteTrack submodule not found.
+Run 'git submodule update --init --recursive' first.
+```
+
+the repository was cloned without the ByteTrack code. Re-fetch the submodule or clone it manually:
+
+```bash
+git submodule update --init --recursive
+# or, if the folder is empty
+rm -rf externals/ByteTrack
+git clone https://github.com/ifzhang/ByteTrack.git externals/ByteTrack
+```
+
+If the clone fails with a `CONNECT tunnel failed: 403` error, it
+is due to network restrictions. Re-run the command once internet
+access is restored or fetch the code via another method.
+
+Then run `bash build_externals.sh` again.
 
 Build the Docker image (requires NVIDIA GPU drivers):
 

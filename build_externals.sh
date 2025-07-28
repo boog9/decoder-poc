@@ -18,8 +18,13 @@ set -euo pipefail
 BYTE_DIR="$(dirname "$0")/externals/ByteTrack"
 
 if [ ! -f "$BYTE_DIR/setup.py" ]; then
-    echo "ByteTrack submodule not found.\n" \
-         "Run 'git submodule update --init --recursive' first." >&2
+    echo "ByteTrack submodule not found." >&2
+    echo "Run 'git submodule update --init --recursive' first." >&2
+    echo "If the directory is empty you can clone it manually:" >&2
+    echo "  rm -rf externals/ByteTrack" >&2
+    echo "  git clone https://github.com/ifzhang/ByteTrack.git externals/ByteTrack" >&2
+    echo "If cloning fails with 'CONNECT tunnel failed: 403', try again when" >&2
+    echo "network access is available." >&2
     exit 1
 fi
 
