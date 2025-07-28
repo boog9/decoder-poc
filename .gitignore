@@ -1,2 +1,4 @@
 __pycache__/
 *.pyc
+externals/ByteTrack/build/
+externals/ByteTrack/*.so

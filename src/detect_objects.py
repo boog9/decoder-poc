@@ -25,8 +25,17 @@ from typing import Iterable, List, Tuple, Sequence, Dict
 
 from loguru import logger
 
+import os
+import sys
+
+BYTETRACK_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
+)
+if BYTETRACK_PATH not in sys.path:
+    sys.path.insert(0, BYTETRACK_PATH)
+
 try:  # ByteTrack is optional for unit tests
-    from bytetrack import BYTETracker
+    from tracker.byte_tracker import BYTETracker
 except Exception:  # pragma: no cover - optional dependency
     BYTETracker = None  # type: ignore
 
@@ -296,7 +305,7 @@ def track_detections(
 
     if BYTETracker is None:
         raise ImportError(
-            "BYTETracker is required. Install with 'pip install bytetrack'"
+            "BYTETracker is required. Run 'bash build_externals.sh' to compile it"
         )
 
     with detections_json.open() as fh:
