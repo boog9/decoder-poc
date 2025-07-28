@@ -69,6 +69,7 @@ YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 CLASS_MAP = {
     "person": 0,
     "sports ball": 32,
+    "ball": 32,  # alias for compatibility with other datasets
 }
 
 # Map CLI model names to torch.hub callable names.
