@@ -293,6 +293,29 @@ def test_update_tracker_mot_three_params() -> None:
     assert tracker.args[0][0][:4] == [0, 0, 10, 20]
 
 
+def test_update_tracker_output_results_signature() -> None:
+    class DummyTracker:
+        def __init__(self) -> None:
+            self.args = None
+
+        def update(self, output_results, img_info, img_size):
+            self.args = (output_results, img_info, img_size)
+            return ["ok"]
+
+    tracker = DummyTracker()
+    res = dobj._update_tracker(
+        tracker,
+        [[0, 0, 10, 20]],
+        [0.9],
+        ["person"],
+        1,
+    )
+
+    assert res == ["ok"]
+    assert tracker.args[1:] == ((20, 10, 1.0), (10, 20))
+    assert tracker.args[0][0][:4] == [0, 0, 10, 20]
+
+
 def test_update_tracker_mot_two_params_dets_img_info() -> None:
     class DummyTracker:
         def __init__(self) -> None:
