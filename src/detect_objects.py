@@ -28,7 +28,7 @@ from loguru import logger
 import os
 import sys
 
-# Add the ByteTrack repo root so that "bytetrack" package is importable
+# Add the ByteTrack repo root so that `tracker` (and other packages) become importable
 BT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
 )
@@ -36,7 +36,7 @@ if BT_ROOT not in sys.path:
     sys.path.insert(0, BT_ROOT)
 
 try:  # ByteTrack is optional for unit tests
-    from bytetrack.tracker.byte_tracker import BYTETracker
+    from tracker.byte_tracker import BYTETracker
 except Exception:  # pragma: no cover - optional dependency
     BYTETracker = None  # type: ignore
 
