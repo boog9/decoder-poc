@@ -17,6 +17,7 @@ This script requires a CUDA-enabled GPU and YOLOX 0.3+.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import time
@@ -332,7 +333,22 @@ def track_detections(
                 {"bbox": det["bbox"], "score": score, "class": cls}
             )
 
-    tracker = BYTETracker(track_thresh=min_score, frame_rate=30)
+    # Create tracker instance. ByteTrack's constructor differs between
+    # the PyPI distribution and the upstream repository. Inspect the
+    # ``BYTETracker`` signature to decide which arguments to pass.
+    sig = inspect.signature(BYTETracker.__init__)
+    if "track_thresh" in sig.parameters:
+        tracker = BYTETracker(track_thresh=min_score, frame_rate=30)
+    else:
+        from types import SimpleNamespace
+
+        args_bt = SimpleNamespace(
+            track_thresh=min_score,
+            track_buffer=30,
+            match_thresh=0.8,
+            mot20=False,
+        )
+        tracker = BYTETracker(args_bt, frame_rate=30)
     output: list[dict] = []
     track_ids = set()
     for frame_id in sorted(frames):
