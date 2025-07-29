@@ -44,6 +44,8 @@ loguru_mod.logger = types.SimpleNamespace(
     debug=lambda *a, **k: None,
     warning=lambda *a, **k: None,
     error=lambda *a, **k: None,
+    remove=lambda *a, **k: None,
+    add=lambda *a, **k: None,
 )
 sys.modules.setdefault("loguru", loguru_mod)
 pil_mod = types.ModuleType("PIL")
