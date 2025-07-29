@@ -22,6 +22,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
+import re
 
 import click
 import cv2
@@ -139,6 +140,11 @@ def visualize_tracks(
     for idx, frame_path in enumerate(frames, start=1):
         if hasattr(logger, "debug"):
             logger.debug("Processing frame %d: %s", idx, frame_path)
+        match = re.search(r"(\d+)", frame_path.stem)
+        if not match:
+            logger.warning("No frame number found in %s", frame_path)
+            continue
+        frame_idx = int(match.group(1))
         img = cv2.imread(str(frame_path))
         if img is None:
             logger.warning("cv2.imread failed for %s, trying PIL fallback", frame_path)
@@ -152,7 +158,7 @@ def visualize_tracks(
             except Exception as exc:
                 logger.error("Failed to read frame %s with PIL: %s", frame_path, exc)
                 continue
-        detections = frame_map.get(idx, [])
+        detections = frame_map.get(frame_idx, [])
         for det in detections:
             bbox = det.get("bbox", [0, 0, 0, 0])
             x1, y1, x2, y2 = map(int, bbox)
