@@ -255,6 +255,45 @@ annotated PNG images to ``frames_roi``. Using ``--label`` draws the COCO class n
 and confidence score above each box. The bounding box coordinates are expected
 to match the original frame pixels, so no scaling is applied when drawing.
 
+## Track visualisation (draw_tracks)
+
+After running detection and tracking you can overlay tracking results either on individual frames or combine them into an MP4 video. The command reads ``tracks.json`` produced by ``detect_objects track`` and draws each track ID with a deterministic colour.
+
+```bash
+python -m src.draw_tracks \
+    --frames-dir frames/ \
+    --tracks-json tracks.json \
+    --output-dir frames_tracks/ \
+    --label
+```
+
+To create an MP4 instead of annotated images:
+
+```bash
+python -m src.draw_tracks \
+    --frames-dir frames/ \
+    --tracks-json tracks.json \
+    --output-video out.mp4 \
+    --fps 25
+```
+
+| Option | Description |
+| ------ | ----------- |
+| ``--frames-dir`` | Directory with input frame images |
+| ``--tracks-json`` | ByteTrack output JSON |
+| ``--output-dir`` | Destination folder for annotated frames |
+| ``--output-video`` | Destination MP4 file |
+| ``--fps`` | Frames per second for MP4 (default ``30``) |
+| ``--label/--no-label`` | Draw text labels with class and ID |
+| ``--palette`` | ``coco`` uses fixed COCO colours, ``random`` assigns random deterministic colours, ``track`` hashes the ID |
+| ``--thickness`` | Bounding box thickness |
+| ``--max-frames`` | Limit number of processed frames |
+
+**Exactly one of `--output-dir` or `--output-video` must be provided.**
+
+Use this step after ``detect_objects track`` and before any further processing that requires visual inspection.
+Place this step right after ``detect_objects track`` in the makefile / bash-script flow.
+
 ## Detection Validation CLI
 
 Run simple quality checks on detection results.

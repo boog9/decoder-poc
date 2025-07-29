@@ -24,7 +24,10 @@ import time
 from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence, Dict
 
-from shapely.geometry import box
+try:
+    from shapely.geometry import box
+except Exception:  # pragma: no cover - optional dependency
+    box = None  # type: ignore
 
 import numpy as np
 
@@ -210,6 +213,8 @@ def _first_det_for_track(tid: int, frame_id: int) -> dict:
 
 def _bbox_iou(b1: Sequence[float], b2: Sequence[float]) -> float:
     """Return IoU between two bounding boxes."""
+    if box is None:
+        return 0.0
     b1_box = box(*b1)
     b2_box = box(*b2)
     inter = b1_box.intersection(b2_box).area
