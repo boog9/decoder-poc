@@ -128,3 +128,29 @@ def test_visualize_tracks_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     dt.visualize_tracks(frames, tj, None, out_video, palette="track", fps=25.0)
 
     assert out_video.exists() and out_video.stat().st_size > 0
+
+
+def test_frame_index_shift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dummy = _setup_cv2(monkeypatch)
+    monkeypatch.setattr(
+        dt,
+        "logger",
+        types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None),
+    )
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for i in range(1, 3):
+        (frames / f"frame_{i:06d}.png").write_bytes(b"\x00")
+
+    tracks = [
+        {"frame": 0, "track_id": 1, "bbox": [0, 0, 1, 1]},
+        {"frame": 1, "track_id": 1, "bbox": [1, 1, 2, 2]},
+    ]
+    tj = tmp_path / "tracks.json"
+    tj.write_text(json.dumps(tracks))
+
+    out_dir = tmp_path / "out"
+    dt.visualize_tracks(frames, tj, out_dir, None)
+
+    assert len(dummy.rectangles) == 2

@@ -23,12 +23,16 @@ from typing import Dict, List, Tuple
 
 import click
 import cv2
-from loguru import logger
 import sys
+from loguru import logger
 
 if hasattr(logger, "remove"):
     logger.remove()
-    logger.add(sys.stderr, level="INFO")
+    logger.add(
+        sys.stderr,
+        level="INFO",
+        format="{time:HH:mm:ss} | {level} | {message}",
+    )
 
 from .draw_roi import COCO_CLASS_NAMES, _label_color
 from .utils.draw_helpers import IMAGE_EXT, get_font, load_frames
@@ -86,6 +90,12 @@ def visualize_tracks(
     for det in tracks:
         frame_idx = int(det.get("frame", 0))
         frame_map[frame_idx].append(det)
+
+    if frame_map and min(frame_map.keys()) == 0:
+        logger.warning(
+            "Detected frame indices start at 0. Normalizing +1 for alignment."
+        )
+        frame_map = {fid + 1: dets for fid, dets in frame_map.items()}
 
     frames = load_frames(frames_dir, max_frames)
     if not frames:
@@ -182,9 +192,16 @@ def visualize_tracks(
     if writer:
         writer.stdin.close()
         writer.wait()
-        logger.info("Finished writing video: %s", output_video)
-        if not output_video.exists():
-            logger.error("Expected output video not found!")
+        logger.info("writer.wait() done")
+        if output_video.exists():
+            logger.info("Finished writing video: %s", output_video)
+        else:
+            logger.error("Expected output video not found at %s", output_video)
+    else:
+        num_written = len(
+            [p for p in output_dir.iterdir() if p.suffix.lower() in IMAGE_EXT]
+        )
+        logger.info("Finished writing %d frames to %s", num_written, output_dir)
 
 
 def _validate_outputs(ctx: click.Context, param: click.Parameter, value: Path | None) -> Path | None:
