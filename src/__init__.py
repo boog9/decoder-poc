@@ -11,4 +11,18 @@
 # limitations under the License.
 """Package for video processing utilities."""
 
+__all__ = []
+
+
+def draw_tracks_cli(*args, **kwargs):
+    """Lazy import wrapper for :func:`src.draw_tracks.cli`."""
+
+    from .draw_tracks import cli
+
+    return cli(*args, **kwargs)
+
+
+__all__.append("draw_tracks_cli")
+
+
 
