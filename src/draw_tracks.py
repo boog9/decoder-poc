@@ -13,8 +13,8 @@
 
 from __future__ import annotations
 
-import sys
 from loguru import logger
+import sys
 
 logger.remove()
 logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level} | {message}")
@@ -97,16 +97,19 @@ def visualize_tracks(
     if not frames:
         logger.warning("No valid frames found in %s", frames_dir)
         return
+    logger.info("Loaded %d frame(s) from %s", len(frames), frames_dir)
+
+    first_img = cv2.imread(str(frames[0]))
+    if first_img is None:
+        logger.error("Failed to read first frame %s", frames[0])
+        raise RuntimeError(f"Failed to read {frames[0]}")
 
     font, font_scale, line_type = get_font()
     colors_cache: Dict[int, Tuple[int, int, int]] = {}
 
     writer: subprocess.Popen | None = None
     if output_video:
-        first = cv2.imread(str(frames[0]))
-        if first is None:
-            raise RuntimeError(f"Failed to read {frames[0]}")
-        h, w = first.shape[:2]
+        h, w = first_img.shape[:2]
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -134,6 +137,7 @@ def visualize_tracks(
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Output mode: writing annotated frames to %s", output_dir)
 
+    num_written = 0
     for idx, frame_path in enumerate(frames, start=1):
         if hasattr(logger, "debug"):
             logger.debug("Processing frame %d: %s", idx, frame_path)
@@ -178,9 +182,11 @@ def visualize_tracks(
 
         if writer:
             writer.stdin.write(img.tobytes())
+            num_written += 1
         else:
             out_path = output_dir / frame_path.name
             cv2.imwrite(str(out_path), img)
+            num_written += 1
 
         if idx % 100 == 0:
             logger.info("Processed %d frames", idx)
@@ -188,16 +194,16 @@ def visualize_tracks(
     if writer:
         writer.stdin.close()
         writer.wait()
-        logger.info("writer.wait() done")
         if output_video.exists():
-            logger.info("Finished writing video: %s", output_video)
+            logger.info(
+                "Finished writing %d frame(s) to video: %s", num_written, output_video
+            )
         else:
             logger.error("Expected output video not found at %s", output_video)
     else:
-        num_written = len(
-            [p for p in output_dir.iterdir() if p.suffix.lower() in IMAGE_EXT]
+        logger.info(
+            "Finished writing %d frame(s) to %s", num_written, output_dir
         )
-        logger.info("Finished writing %d frames to %s", num_written, output_dir)
 
 
 def _validate_outputs(ctx: click.Context, param: click.Parameter, value: Path | None) -> Path | None:
