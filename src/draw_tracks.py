@@ -14,10 +14,6 @@
 from __future__ import annotations
 
 from loguru import logger
-import sys
-
-logger.remove()
-logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level} | {message}")
 
 import hashlib
 import json
@@ -243,6 +239,8 @@ def cli(
     fps: float,
 ) -> None:
     """Command line interface for :func:`visualize_tracks`."""
+
+    logger.info("CLI started")
 
     visualize_tracks(
         frames_dir,

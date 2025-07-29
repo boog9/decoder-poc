@@ -11,6 +11,13 @@
 # limitations under the License.
 """Package for video processing utilities."""
 
+import sys
+from loguru import logger
+
+# Configure a global loguru logger early so it works across modules.
+logger.remove()
+logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level} | {message}")
+
 __all__ = []
 
 
