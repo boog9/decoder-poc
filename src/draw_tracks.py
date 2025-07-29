@@ -24,6 +24,11 @@ from typing import Dict, List, Tuple
 import click
 import cv2
 from loguru import logger
+import sys
+
+if hasattr(logger, "remove"):
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
 
 from .draw_roi import COCO_CLASS_NAMES, _label_color
 from .utils.draw_helpers import IMAGE_EXT, get_font, load_frames
@@ -60,6 +65,12 @@ def visualize_tracks(
 ) -> None:
     """Overlay tracking results on frames and save images or a video."""
 
+    logger.info("Starting visualize_tracks()")
+    logger.info("\u2192 frames_dir = %s", frames_dir)
+    logger.info("\u2192 tracks_json = %s", tracks_json)
+    logger.info("\u2192 output_dir = %s", output_dir)
+    logger.info("\u2192 output_video = %s", output_video)
+
     if output_video and output_dir:
         raise ValueError("--output-dir and --output-video are mutually exclusive")
 
@@ -68,7 +79,7 @@ def visualize_tracks(
     if not isinstance(tracks, list):
         raise ValueError("tracks-json must contain a list")
     if not tracks:
-        logger.warning("Tracks JSON is empty: %s", tracks_json)
+        logger.warning("tracks.json is empty or has no detections")
         return
 
     frame_map: Dict[int, List[dict]] = defaultdict(list)
@@ -78,7 +89,7 @@ def visualize_tracks(
 
     frames = load_frames(frames_dir, max_frames)
     if not frames:
-        logger.warning("No frames found in {}", frames_dir)
+        logger.warning("No valid frames found in %s", frames_dir)
         return
 
     font, font_scale, line_type = get_font()
@@ -111,11 +122,15 @@ def visualize_tracks(
         writer = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         assert writer.stdin is not None
         # first frame will be written in the main loop
+        logger.info("Output mode: writing video to %s at %gfps", output_video, fps)
     else:
         output_dir = output_dir or Path("frames_tracks")
         output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Output mode: writing annotated frames to %s", output_dir)
 
     for idx, frame_path in enumerate(frames, start=1):
+        if hasattr(logger, "debug"):
+            logger.debug("Processing frame %d: %s", idx, frame_path)
         img = cv2.imread(str(frame_path))
         if img is None:
             logger.warning("Failed to read frame %s", frame_path)
@@ -167,6 +182,9 @@ def visualize_tracks(
     if writer:
         writer.stdin.close()
         writer.wait()
+        logger.info("Finished writing video: %s", output_video)
+        if not output_video.exists():
+            logger.error("Expected output video not found!")
 
 
 def _validate_outputs(ctx: click.Context, param: click.Parameter, value: Path | None) -> Path | None:
