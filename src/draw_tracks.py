@@ -13,6 +13,12 @@
 
 from __future__ import annotations
 
+import sys
+from loguru import logger
+
+logger.remove()
+logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level} | {message}")
+
 import hashlib
 import json
 import random
@@ -23,16 +29,6 @@ from typing import Dict, List, Tuple
 
 import click
 import cv2
-import sys
-from loguru import logger
-
-if hasattr(logger, "remove"):
-    logger.remove()
-    logger.add(
-        sys.stderr,
-        level="INFO",
-        format="{time:HH:mm:ss} | {level} | {message}",
-    )
 
 from .draw_roi import COCO_CLASS_NAMES, _label_color
 from .utils.draw_helpers import IMAGE_EXT, get_font, load_frames
