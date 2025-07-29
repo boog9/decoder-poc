@@ -22,6 +22,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+pil_mod = types.ModuleType("PIL")
+pil_mod.__path__ = []
+pil_image_mod = types.ModuleType("PIL.Image")
+pil_image_mod.open = lambda p: None
+pil_mod.Image = object
+sys.modules.setdefault("PIL", pil_mod)
+sys.modules.setdefault("PIL.Image", pil_image_mod)
+
+cv2_stub = types.ModuleType("cv2")
+cv2_stub.imread = lambda p: None
+cv2_stub.rectangle = lambda *a, **k: None
+cv2_stub.circle = lambda *a, **k: None
+cv2_stub.getTextSize = lambda *a, **k: ((0, 0), 0)
+cv2_stub.putText = lambda *a, **k: None
+cv2_stub.imwrite = lambda *a, **k: True
+cv2_stub.FONT_HERSHEY_SIMPLEX = 0
+cv2_stub.LINE_AA = 16
+sys.modules.setdefault("cv2", cv2_stub)
+
+loguru_mod = types.ModuleType("loguru")
+loguru_mod.logger = types.SimpleNamespace(
+    info=lambda *a, **k: None,
+    debug=lambda *a, **k: None,
+    warning=lambda *a, **k: None,
+    error=lambda *a, **k: None,
+    remove=lambda *a, **k: None,
+    add=lambda *a, **k: None,
+)
+sys.modules.setdefault("loguru", loguru_mod)
+
 import src.draw_tracks as dt  # noqa: E402
 
 
@@ -154,3 +184,44 @@ def test_frame_index_shift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     dt.visualize_tracks(frames, tj, out_dir, None)
 
     assert len(dummy.rectangles) == 2
+
+
+def test_pil_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dummy = _setup_cv2(monkeypatch)
+    def _imread(path: str):
+        if not hasattr(_imread, "count"):
+            _imread.count = 0
+        _imread.count += 1
+        if _imread.count == 1:
+            return types.SimpleNamespace(shape=(1, 1, 3), tobytes=lambda: b"0")
+        return None
+
+    monkeypatch.setattr(dt.cv2, "imread", _imread)
+    monkeypatch.setattr(
+        dt,
+        "logger",
+        types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None, error=lambda *a, **k: None),
+    )
+
+    class _DummyImg:
+        def convert(self, mode: str):
+            return [[(0, 0, 0)]]
+
+    monkeypatch.setattr(dt, "Image", types.SimpleNamespace(open=lambda p: _DummyImg()))
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for i in range(1, 4):
+        (frames / f"frame_{i:06d}.png").write_bytes(b"\x00")
+
+    tracks = [
+        {"frame": 1, "track_id": 1, "bbox": [0, 0, 1, 1]},
+        {"frame": 2, "track_id": 1, "bbox": [1, 1, 2, 2]},
+    ]
+    tj = tmp_path / "tracks.json"
+    tj.write_text(json.dumps(tracks))
+
+    out_dir = tmp_path / "out"
+    dt.visualize_tracks(frames, tj, out_dir, None)
+
+    assert len(dummy.written) == 3

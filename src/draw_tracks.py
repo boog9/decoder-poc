@@ -25,6 +25,8 @@ from typing import Dict, List, Tuple
 
 import click
 import cv2
+import numpy as np
+from PIL import Image
 
 from .draw_roi import COCO_CLASS_NAMES, _label_color
 from .utils.draw_helpers import IMAGE_EXT, get_font, load_frames
@@ -139,8 +141,17 @@ def visualize_tracks(
             logger.debug("Processing frame %d: %s", idx, frame_path)
         img = cv2.imread(str(frame_path))
         if img is None:
-            logger.warning("Failed to read frame %s", frame_path)
-            continue
+            logger.warning("cv2.imread failed for %s, trying PIL fallback", frame_path)
+            try:
+                pil_img = Image.open(frame_path).convert("RGB")
+                img = np.array(pil_img)
+                try:
+                    img = img[:, :, ::-1]
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.error("Failed to read frame %s with PIL: %s", frame_path, exc)
+                continue
         detections = frame_map.get(idx, [])
         for det in detections:
             bbox = det.get("bbox", [0, 0, 0, 0])
