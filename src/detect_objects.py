@@ -260,7 +260,13 @@ def _load_model(model_name: str):
     variant = model_name.split("-", 1)[-1]
     LOGGER.info("Loading %s", model_name)
 
-    exp = get_exp(f"yolox_{variant}.py", model_name)
+    try:
+        exp = get_exp(f"yolox_{variant}.py", model_name)
+    except Exception as exc:  # pragma: no cover - missing exp file
+        raise ImportError(
+            f"Missing YOLOX experiment for {model_name}. "
+            "Did you fetch the ByteTrack submodule with 'git submodule update --init --recursive'?"
+        ) from exc
     model = exp.get_model()
     weights_dir = Path(__file__).resolve().parents[1] / "weights"
     ckpt_path = weights_dir / f"yolox_{variant}.pth"
