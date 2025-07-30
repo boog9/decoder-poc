@@ -107,31 +107,54 @@ def test_parse_args_custom_classes() -> None:
     assert args.classes == [1, 2]
 
 
-def test_load_model_translates_hyphen(monkeypatch) -> None:
+def test_load_model_uses_local_yolox(monkeypatch) -> None:
     recorded = {}
 
-    def fake_load(repo, name, pretrained=True):
-        recorded["repo"] = repo
-        recorded["name"] = name
+    def fake_get_exp(exp_file: str, exp_name: str):
+        recorded["exp_file"] = exp_file
+        recorded["exp_name"] = exp_name
 
-        class Dummy:
-            head = object()
+        class DummyExp:
+            def get_model(self):
+                class DummyModel:
+                    def load_state_dict(self, state):
+                        recorded["state"] = state
 
-            def eval(self):
-                return self
+                    def eval(self):
+                        recorded["eval"] = True
+                        return self
 
-            def cuda(self):
-                recorded["cuda"] = True
-                return self
+                    def to(self, device):
+                        recorded["device"] = str(device)
+                        return self
 
-        return Dummy()
+                return DummyModel()
 
-    monkeypatch.setattr(dobj.torch.hub, "load", fake_load)
+        return DummyExp()
+
+    def fake_torch_load(path, map_location=None):
+        recorded["ckpt"] = str(path)
+        return {"model": {}}
+
+    def fake_fuse(model):
+        recorded["fused"] = True
+        return model
+
+    monkeypatch.setattr(dobj.torch.cuda, "is_available", lambda: True)
+    exp_mod = types.ModuleType("yolox.exp")
+    exp_mod.get_exp = fake_get_exp
+    utils_mod = types.ModuleType("yolox.utils")
+    utils_mod.fuse_model = fake_fuse
+    sys.modules["yolox.exp"] = exp_mod
+    sys.modules["yolox.utils"] = utils_mod
+    monkeypatch.setattr(dobj.torch, "load", fake_torch_load)
+
     dobj._load_model("yolox-s")
 
-    assert recorded["name"] == "yolox_s"
-    assert recorded["repo"] == "Megvii-BaseDetection/YOLOX"
-    assert recorded.get("cuda")
+    assert recorded["exp_file"].endswith("yolox_s.py")
+    assert recorded["ckpt"].endswith("weights/yolox_s.pth")
+    assert recorded.get("fused")
+    assert recorded.get("device") == "cuda"
 
 
 

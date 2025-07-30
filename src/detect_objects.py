@@ -226,13 +226,26 @@ def _bbox_iou(b1: Sequence[float], b2: Sequence[float]) -> float:
 
 
 def _load_model(model_name: str):
-    """Load a YOLOX model via ``torch.hub`` on CUDA."""
+    """Load a YOLOX model from the local ByteTrack implementation."""
+
     if model_name not in YOLOX_MODELS:
         raise ValueError(f"Unsupported model {model_name}")
-    torch_name = _YOLOX_MODEL_MAP[model_name]
-    LOGGER.info("Loading %s on CUDA", model_name)
-    model = torch.hub.load("Megvii-BaseDetection/YOLOX", torch_name, pretrained=True)
-    return model.eval().cuda()
+
+    from yolox.exp import get_exp
+    from yolox.utils import fuse_model
+
+    variant = model_name.split("-", 1)[-1]
+    LOGGER.info("Loading %s", model_name)
+
+    exp = get_exp(f"yolox_{variant}.py", model_name)
+    model = exp.get_model()
+    weights_dir = Path(__file__).resolve().parents[1] / "weights"
+    ckpt_path = weights_dir / f"yolox_{variant}.pth"
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(ckpt["model"])
+    model = fuse_model(model)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return model.eval().to(device)
 
 
 def _letterbox_image(
