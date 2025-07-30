@@ -59,6 +59,7 @@ import torch
 
 try:
     from yolox.data.datasets import COCO_CLASSES
+
     YOLOX_NUM_CLASSES = len(COCO_CLASSES)
 except Exception:  # pragma: no cover - optional dependency
     YOLOX_NUM_CLASSES = 80
@@ -97,7 +98,9 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     det = sub.add_parser("detect", help="Run YOLOX detection")
     det.add_argument("--frames-dir", type=Path, required=True)
     det.add_argument("--output-json", type=Path, required=True)
-    det.add_argument("--model", type=str, default="yolox-s", choices=sorted(YOLOX_MODELS))
+    det.add_argument(
+        "--model", type=str, default="yolox-s", choices=sorted(YOLOX_MODELS)
+    )
     det.add_argument("--img-size", type=int, default=640)
     det.add_argument("--conf-thres", type=float, default=0.3)
     det.add_argument("--nms-thres", type=float, default=0.45)
@@ -138,7 +141,9 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         return CLASS_NAME_TO_ID.get(CLASS_ALIASES.get(c, c), -1)
 
     if params == ["dets", "frame_id"]:
-        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
+            :, None
+        ]
         dets = np.concatenate(
             [
                 np.asarray(tlwhs, dtype=np.float32),
@@ -150,9 +155,15 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         return tracker.update(dets, frame_id)
 
     if params == ["output_results", "img_info", "img_size"]:
-        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
+            :, None
+        ]
         dets = np.concatenate(
-            [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
+            [
+                np.asarray(tlwhs, dtype=np.float32),
+                np.asarray(scores, dtype=np.float32)[:, None],
+                cls_arr,
+            ],
             axis=1,
         )
 
@@ -166,9 +177,15 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
 
     # --- version with MOT style arguments --------------------------------
     if {"img_info", "img_size"} & set(params):
-        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
+            :, None
+        ]
         dets = np.concatenate(
-            [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
+            [
+                np.asarray(tlwhs, dtype=np.float32),
+                np.asarray(scores, dtype=np.float32)[:, None],
+                cls_arr,
+            ],
             axis=1,
         )
 
@@ -231,8 +248,14 @@ def _load_model(model_name: str):
     if model_name not in YOLOX_MODELS:
         raise ValueError(f"Unsupported model {model_name}")
 
-    from yolox.exp import get_exp
-    from yolox.utils import fuse_model
+    try:
+        from yolox.exp import get_exp
+        from yolox.utils import fuse_model
+    except Exception as exc:  # pragma: no cover - missing submodule
+        raise ImportError(
+            "YOLOX modules not found. Did you clone the ByteTrack submodule and "
+            "run 'bash build_externals.sh'?"
+        ) from exc
 
     variant = model_name.split("-", 1)[-1]
     LOGGER.info("Loading %s", model_name)
@@ -241,6 +264,10 @@ def _load_model(model_name: str):
     model = exp.get_model()
     weights_dir = Path(__file__).resolve().parents[1] / "weights"
     ckpt_path = weights_dir / f"yolox_{variant}.pth"
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(
+            f"Weights not found: {ckpt_path}. Place pretrained YOLOX weights in the 'weights' directory."
+        )
     ckpt = torch.load(ckpt_path, map_location="cpu")
     model.load_state_dict(ckpt["model"])
     model = fuse_model(model)
@@ -314,11 +341,13 @@ def _filter_detections(
         if int(cls_id) not in allowed or float(score) < conf_thr:
             continue
         results.append(
-            ([float(x1), float(y1), float(x2), float(y2)], float(score), int(cls_id))
+            (
+                [float(x1), float(y1), float(x2), float(y2)],
+                float(score),
+                int(cls_id),
+            )
         )
     return results
-
-
 
 
 def detect_folder(
@@ -345,7 +374,11 @@ def detect_folder(
         class_ids = list(range(YOLOX_NUM_CLASSES))
     model = _load_model(model_name)
     frames = sorted(
-        [p for p in frames_dir.iterdir() if p.suffix.lower() in {".jpg", ".png"}]
+        [
+            p
+            for p in frames_dir.iterdir()
+            if p.suffix.lower() in {".jpg", ".png"}
+        ]
     )
     if not frames:
         LOGGER.warning("No frames found in %s", frames_dir)
@@ -355,7 +388,9 @@ def detect_folder(
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
-            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(frame, img_size)
+            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(
+                frame, img_size
+            )
             with torch.no_grad():
                 raw = model(tensor)[0]
 
@@ -376,7 +411,11 @@ def detect_folder(
                 class_agnostic=False,
             )
 
-            det = processed[0] if processed and processed[0] is not None else None
+            det = (
+                processed[0]
+                if processed and processed[0] is not None
+                else None
+            )
             preds = det.cpu() if det is not None else torch.empty((0, 6))
             preds_list = preds.tolist()
 
@@ -384,9 +423,9 @@ def detect_folder(
             for bbox, score, cls_id in _filter_detections(
                 preds_list, conf_thres, class_ids
             ):
-                assert 0 <= cls_id < YOLOX_NUM_CLASSES, (
-                    f"Unexpected class id {cls_id}"
-                )
+                assert (
+                    0 <= cls_id < YOLOX_NUM_CLASSES
+                ), f"Unexpected class id {cls_id}"
                 x1_p, y1_p, x2_p, y2_p = bbox
                 x0 = max((x1_p - pad_x) / ratio, 0.0)
                 y0 = max((y1_p - pad_y) / ratio, 0.0)
@@ -410,7 +449,9 @@ def detect_folder(
                     )
                 else:
                     LOGGER.debug(
-                        "Discarded invalid box %s from %s", [x0, y0, x1, y1], frame.name
+                        "Discarded invalid box %s from %s",
+                        [x0, y0, x1, y1],
+                        frame.name,
                     )
 
             out.append({"frame": frame.name, "detections": detections})
@@ -458,7 +499,9 @@ def track_detections(
     for det in sorted(raw, key=lambda x: x["frame"]):
         frame_match = re.search(r"\d+", str(det["frame"]))
         if not frame_match:
-            LOGGER.debug("Skipping detection with invalid frame: %s", det["frame"])
+            LOGGER.debug(
+                "Skipping detection with invalid frame: %s", det["frame"]
+            )
             continue
         frame_id = int(frame_match.group())
         cls_val = det.get("class")
@@ -492,7 +535,10 @@ def track_detections(
     for frame_id in sorted(frames):
         dets = frames[frame_id]
         LOGGER.debug("Frame %s: %s detections", frame_id, len(dets))
-        tlwhs = [[b[0], b[1], b[2] - b[0], b[3] - b[1]] for b in (d["bbox"] for d in dets)]
+        tlwhs = [
+            [b[0], b[1], b[2] - b[0], b[3] - b[1]]
+            for b in (d["bbox"] for d in dets)
+        ]
         scores = [d["score"] for d in dets]
         classes = [d["class"] for d in dets]
         online = _update_tracker(tracker, tlwhs, scores, classes, frame_id)
@@ -567,9 +613,7 @@ def track_detections(
         for cid in (CLASS_NAME_TO_ID["person"], CLASS_NAME_TO_ID["ball"])
     }
     logger.info("Track summary: {}", summary)
-    logger.info(
-        "Saved {} tracked detections to {}", len(output), output_json
-    )
+    logger.info("Saved {} tracked detections to {}", len(output), output_json)
 
 
 def main(argv: Iterable[str] | None = None) -> None:
@@ -581,7 +625,9 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     if args.command == "track":
         try:
-            track_detections(args.detections_json, args.output_json, args.min_score)
+            track_detections(
+                args.detections_json, args.output_json, args.min_score
+            )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Tracking failed")
             raise SystemExit(1) from exc

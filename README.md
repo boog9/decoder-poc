@@ -329,3 +329,16 @@ docker run --gpus all --rm -v $(pwd):/app decoder-image:latest \
 
 The command prints the detections as JSON and saves the annotated image to
 ``out.jpg``.
+
+## Troubleshooting
+
+- **ImportError when loading YOLOX** – Make sure the ByteTrack submodule is
+  cloned and built. Run:
+
+  ```bash
+  git submodule update --init --recursive
+  bash build_externals.sh
+  ```
+
+- **Missing weights** – Download the official YOLOX checkpoints and place them
+  in the ``weights`` directory, e.g. ``weights/yolox_x.pth``.
