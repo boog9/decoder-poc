@@ -23,6 +23,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Iterable, List, Tuple, Sequence, Dict
+import re
 
 try:
     from shapely.geometry import box
@@ -440,7 +441,11 @@ def track_detections(
     _det_index.clear()
     frames: Dict[int, list[dict]] = {}
     for det in sorted(raw, key=lambda x: x["frame"]):
-        frame_id = int(det["frame"])
+        frame_match = re.search(r"\d+", str(det["frame"]))
+        if not frame_match:
+            LOGGER.debug("Skipping detection with invalid frame: %s", det["frame"])
+            continue
+        frame_id = int(frame_match.group())
         cls_name = str(det.get("class"))
         if cls_name not in {"person", "ball", "sports ball"}:
             continue

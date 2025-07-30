@@ -279,6 +279,51 @@ def test_track_detections_iou_matching(tmp_path: Path, monkeypatch) -> None:
     assert "track_id" not in dobj._det_index[(1, 0)]
 
 
+def test_track_detections_string_frame(tmp_path: Path, monkeypatch) -> None:
+    class DummyObj:
+        def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
+            self.track_id = tid
+            self.tlwh = tlwh
+            self.score = score
+
+    class DummyTracker:
+        def __init__(self, *a, **k) -> None:
+            self.last: dict[tuple[float, float, float, float], int] = {}
+            self.next_id = 1
+
+        def update(self, tlwhs, scores, classes, frame_id):
+            out = []
+            for tlwh, score in zip(tlwhs, scores):
+                key = tuple(tlwh)
+                tid = self.last.get(key)
+                if tid is None:
+                    tid = self.next_id
+                    self.next_id += 1
+                    self.last[key] = tid
+                out.append(DummyObj(tid, tlwh, score))
+            return out
+
+    monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+
+    det_json = tmp_path / "det.json"
+    det_json.write_text(
+        json.dumps(
+            [
+                {"frame": "frame_000001.png", "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": "frame_000002.png", "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
+            ]
+        )
+    )
+    out_json = tmp_path / "out.json"
+    dobj.track_detections(det_json, out_json, 0.3)
+
+    with out_json.open() as fh:
+        out = json.load(fh)
+
+    assert len(out) == 2
+    assert out[0]["frame"] == 1 and out[1]["frame"] == 2
+
+
 def test_update_tracker_mot_two_params() -> None:
     class DummyTracker:
         def __init__(self) -> None:
