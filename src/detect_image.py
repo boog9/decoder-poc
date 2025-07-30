@@ -23,6 +23,7 @@ import torch
 from PIL import Image, ImageDraw
 
 from . import detect_objects as dobj
+from .utils.classes import CLASS_NAME_TO_ID
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def detect_image(
 
     detections: List[Dict] = []
     if class_ids is None:
-        class_ids = [dobj.CLASS_MAP["person"]]
+        class_ids = [CLASS_NAME_TO_ID["person"]]
     for bbox, score, cls in dobj._filter_detections(outputs_list, conf_thres, class_ids):
         x0 = max((bbox[0] - pad_x) / ratio, 0.0)
         y0 = max((bbox[1] - pad_y) / ratio, 0.0)
