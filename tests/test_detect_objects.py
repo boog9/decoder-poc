@@ -235,8 +235,8 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
     det_json.write_text(
         json.dumps(
             [
-                {"frame": "f1.png", "detections": [{"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0}]},
-                {"frame": "f2.png", "detections": [{"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0}]},
+                {"frame": 1, "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": 2, "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
             ]
         )
     )
@@ -267,13 +267,8 @@ def test_track_detections_iou_matching(tmp_path: Path, monkeypatch) -> None:
     det_json.write_text(
         json.dumps(
             [
-                {
-                    "frame": "f1.png",
-                    "detections": [
-                        {"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0},
-                        {"bbox": [10, 10, 12, 12], "score": 0.8, "class": 0},
-                    ],
-                }
+                {"frame": 1, "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": 1, "class": "person", "bbox": [10, 10, 12, 12], "score": 0.8},
             ]
         )
     )

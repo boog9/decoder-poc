@@ -417,7 +417,12 @@ def detect_folder(
 def track_detections(
     detections_json: Path, output_json: Path, min_score: float = 0.3
 ) -> None:
-    """Run ByteTrack on detection results and write tracks."""
+    """Run ByteTrack on detection results and write tracks.
+
+    The ``detections_json`` file is expected to contain a flat list where each
+    element has ``frame``, ``class``, ``bbox`` and ``score`` fields. The output
+    ``tracks.json`` will store one entry per frame with the assigned ``track_id``.
+    """
 
     if BYTETracker is None:
         raise ImportError(
@@ -429,48 +434,45 @@ def track_detections(
     with detections_json.open() as fh:
         raw = json.load(fh)
 
+    if not isinstance(raw, list):
+        raise ValueError("detections-json must contain a list")
+
     _det_index.clear()
     frames: Dict[int, list[dict]] = {}
-    for idx, frame_obj in enumerate(sorted(raw, key=lambda x: x["frame"]), start=1):
-        for det_idx, det in enumerate(frame_obj.get("detections", [])):
-            cls_id = det.get("class")
-            if cls_id == CLASS_MAP["person"]:
-                cls = "person"
-            elif cls_id == CLASS_MAP["sports ball"]:
-                cls = "ball"
-            else:
-                continue
-            score = float(det.get("score", 0.0))
-            if score < min_score:
-                continue
-            d = {"bbox": det["bbox"], "score": score, "class": cls, "class_id": cls_id}
-            frames.setdefault(idx, []).append(d)
-            _det_index[(idx, det_idx)] = d
+    for det in sorted(raw, key=lambda x: x["frame"]):
+        frame_id = int(det["frame"])
+        cls_name = str(det.get("class"))
+        if cls_name not in {"person", "ball", "sports ball"}:
+            continue
+        if cls_name == "sports ball":
+            cls_name = "ball"
+        score = float(det.get("score", 0.0))
+        if score < min_score:
+            continue
+        bbox = [float(v) for v in det["bbox"]]
+        cls_id = CLASS_MAP.get(cls_name, -1)
+        idx = len(frames.setdefault(frame_id, []))
+        entry = {"bbox": bbox, "score": score, "class": cls_name, "class_id": cls_id}
+        frames[frame_id].append(entry)
+        _det_index[(frame_id, idx)] = entry
 
-    # Create tracker instance. ByteTrack's constructor differs between
-    # the PyPI distribution and the upstream repository. Inspect the
-    # ``BYTETracker`` signature to decide which arguments to pass.
-    sig = inspect.signature(BYTETracker.__init__)
-    if "track_thresh" in sig.parameters:
-        tracker = BYTETracker(track_thresh=min_score, frame_rate=30)
-    else:
-        from types import SimpleNamespace
-
-        args_bt = SimpleNamespace(
-            track_thresh=min_score,
-            track_buffer=30,
-            match_thresh=0.8,
-            mot20=False,
-        )
-        tracker = BYTETracker(args_bt, frame_rate=30)
+    # Create tracker instance with recommended parameters.
+    tracker = BYTETracker(
+        track_thresh=min_score,
+        track_buffer=30,
+        match_thresh=0.8,
+        frame_rate=30,
+    )
     output: list[dict] = []
     track_ids = set()
     for frame_id in sorted(frames):
         dets = frames[frame_id]
+        LOGGER.debug("Frame %s: %s detections", frame_id, len(dets))
         tlwhs = [[b[0], b[1], b[2] - b[0], b[3] - b[1]] for b in (d["bbox"] for d in dets)]
         scores = [d["score"] for d in dets]
         classes = [d["class"] for d in dets]
         online = _update_tracker(tracker, tlwhs, scores, classes, frame_id)
+        LOGGER.debug("Frame %s: %s tracks", frame_id, len(online))
 
         frame_det_map = {
             idx: det
