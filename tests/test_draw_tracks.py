@@ -122,9 +122,9 @@ def test_visualize_tracks_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         (frames / f"frame_{i:06d}.png").write_bytes(b"\x00")
 
     tracks = [
-        {"frame": 1, "class": "person", "track_id": 5, "bbox": [0, 0, 2, 2], "score": 0.9},
-        {"frame": 2, "class": "person", "track_id": 5, "bbox": [1, 1, 3, 3], "score": 0.8},
-        {"frame": 3, "class": "person", "track_id": 7, "bbox": [2, 2, 4, 4], "score": 0.7},
+        {"frame": 1, "class": 0, "track_id": 5, "bbox": [0, 0, 2, 2], "score": 0.9},
+        {"frame": 2, "class": 0, "track_id": 5, "bbox": [1, 1, 3, 3], "score": 0.8},
+        {"frame": 3, "class": 0, "track_id": 7, "bbox": [2, 2, 4, 4], "score": 0.7},
     ]
     tj = tmp_path / "tracks.json"
     tj.write_text(json.dumps(tracks))
@@ -148,8 +148,8 @@ def test_visualize_tracks_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         (frames / f"frame_{i:06d}.png").write_bytes(b"\x00")
 
     tracks = [
-        {"frame": 1, "class": "person", "track_id": 5, "bbox": [0, 0, 2, 2], "score": 0.9},
-        {"frame": 2, "class": "person", "track_id": 5, "bbox": [1, 1, 3, 3], "score": 0.8},
+        {"frame": 1, "class": 0, "track_id": 5, "bbox": [0, 0, 2, 2], "score": 0.9},
+        {"frame": 2, "class": 0, "track_id": 5, "bbox": [1, 1, 3, 3], "score": 0.8},
     ]
     tj = tmp_path / "tracks.json"
     tj.write_text(json.dumps(tracks))

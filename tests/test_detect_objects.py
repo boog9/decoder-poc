@@ -235,8 +235,8 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
     det_json.write_text(
         json.dumps(
             [
-                {"frame": 1, "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
-                {"frame": 2, "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": 1, "class": 0, "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": 2, "class": 0, "bbox": [0, 0, 2, 2], "score": 0.9},
             ]
         )
     )
@@ -267,8 +267,8 @@ def test_track_detections_iou_matching(tmp_path: Path, monkeypatch) -> None:
     det_json.write_text(
         json.dumps(
             [
-                {"frame": 1, "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
-                {"frame": 1, "class": "person", "bbox": [10, 10, 12, 12], "score": 0.8},
+                {"frame": 1, "class": 0, "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": 1, "class": 0, "bbox": [10, 10, 12, 12], "score": 0.8},
             ]
         )
     )
@@ -309,8 +309,8 @@ def test_track_detections_string_frame(tmp_path: Path, monkeypatch) -> None:
     det_json.write_text(
         json.dumps(
             [
-                {"frame": "frame_000001.png", "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
-                {"frame": "frame_000002.png", "class": "person", "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": "frame_000001.png", "class": 0, "bbox": [0, 0, 2, 2], "score": 0.9},
+                {"frame": "frame_000002.png", "class": 0, "bbox": [0, 0, 2, 2], "score": 0.9},
             ]
         )
     )
@@ -338,7 +338,7 @@ def test_update_tracker_mot_two_params() -> None:
         tracker,
         [[0, 0, 10, 20]],
         [0.9],
-        ["person"],
+        [0],
         1,
     )
 
@@ -360,7 +360,7 @@ def test_update_tracker_mot_three_params() -> None:
         tracker,
         [[0, 0, 10, 20]],
         [0.9],
-        ["person"],
+        [0],
         1,
     )
 
@@ -383,7 +383,7 @@ def test_update_tracker_output_results_signature() -> None:
         tracker,
         [[0, 0, 10, 20]],
         [0.9],
-        ["person"],
+        [0],
         1,
     )
 
@@ -406,7 +406,7 @@ def test_update_tracker_mot_two_params_dets_img_info() -> None:
         tracker,
         [[0, 0, 10, 20]],
         [0.9],
-        ["person"],
+        [0],
         1,
     )
 
@@ -429,7 +429,7 @@ def test_update_tracker_mot_two_params_dets_img_size() -> None:
         tracker,
         [[0, 0, 10, 20]],
         [0.9],
-        ["person"],
+        [0],
         1,
     )
 

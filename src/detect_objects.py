@@ -36,6 +36,8 @@ from loguru import logger
 import os
 import sys
 
+from .utils.classes import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
+
 # Add ByteTrack root to ``sys.path`` once and import ``BYTETracker`` normally.
 # The tracker module lives under ``yolox.tracker.byte_tracker`` in the bundled
 # repository at ``externals/ByteTrack``.
@@ -70,13 +72,8 @@ YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
 # Number of classes in the default COCO-trained YOLOX models.
 
-# Mapping of human-readable class names to COCO class IDs. Adjust if using a
-# different dataset.
-CLASS_MAP = {
-    "person": 0,
-    "sports ball": 32,
-    "ball": 32,  # alias for compatibility with other datasets
-}
+# Alias mapping for name variants coming from different datasets.
+CLASS_ALIASES = {"sports ball": "ball"}
 
 # Map CLI model names to torch.hub callable names.
 _YOLOX_MODEL_MAP = {
@@ -135,8 +132,13 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
     if params == ["tlwhs", "scores", "frame_id"]:
         return tracker.update(tlwhs, scores, frame_id)
 
+    def _cls_id(c):
+        if isinstance(c, int):
+            return c
+        return CLASS_NAME_TO_ID.get(CLASS_ALIASES.get(c, c), -1)
+
     if params == ["dets", "frame_id"]:
-        cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [
                 np.asarray(tlwhs, dtype=np.float32),
@@ -148,7 +150,7 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         return tracker.update(dets, frame_id)
 
     if params == ["output_results", "img_info", "img_size"]:
-        cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
             axis=1,
@@ -164,7 +166,7 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
 
     # --- version with MOT style arguments --------------------------------
     if {"img_info", "img_size"} & set(params):
-        cls_arr = np.array([CLASS_MAP[c] for c in classes], dtype=np.float32)[:, None]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [np.asarray(tlwhs, dtype=np.float32), np.asarray(scores, dtype=np.float32)[:, None], cls_arr],
             axis=1,
@@ -209,7 +211,7 @@ def _first_det_for_track(tid: int, frame_id: int) -> dict:
     for (fid, _), det in _det_index.items():
         if det.get("track_id") == tid:
             return det
-    return {"class_id": None}
+    return {"class": None}
 
 
 def _bbox_iou(b1: Sequence[float], b2: Sequence[float]) -> float:
@@ -446,18 +448,22 @@ def track_detections(
             LOGGER.debug("Skipping detection with invalid frame: %s", det["frame"])
             continue
         frame_id = int(frame_match.group())
-        cls_name = str(det.get("class"))
-        if cls_name not in {"person", "ball", "sports ball"}:
-            continue
-        if cls_name == "sports ball":
-            cls_name = "ball"
+        cls_val = det.get("class")
+        if isinstance(cls_val, str):
+            cls_key = CLASS_ALIASES.get(cls_val, cls_val)
+            if cls_key not in CLASS_NAME_TO_ID:
+                continue
+            cls_id = CLASS_NAME_TO_ID[cls_key]
+        else:
+            cls_id = int(cls_val)
+            if cls_id not in CLASS_ID_TO_NAME:
+                continue
         score = float(det.get("score", 0.0))
         if score < min_score:
             continue
         bbox = [float(v) for v in det["bbox"]]
-        cls_id = CLASS_MAP.get(cls_name, -1)
         idx = len(frames.setdefault(frame_id, []))
-        entry = {"bbox": bbox, "score": score, "class": cls_name, "class_id": cls_id}
+        entry = {"bbox": bbox, "score": score, "class": cls_id}
         frames[frame_id].append(entry)
         _det_index[(frame_id, idx)] = entry
 
@@ -521,19 +527,15 @@ def track_detections(
             cls_idx = getattr(obj, "cls", getattr(obj, "class_id", None))
             if cls_idx is None:
                 det = _first_det_for_track(obj.track_id, frame_id)
-                cls_idx = det["class_id"]
+                cls_idx = det.get("class")
 
-            cls_name = (
-                "person" if cls_idx == CLASS_MAP["person"]
-                else "ball" if cls_idx == CLASS_MAP["sports ball"]
-                else "unknown"
-            )
+            cls_name = CLASS_ID_TO_NAME.get(int(cls_idx), "unknown")
 
             bbox = [int(x), int(y), int(x + w), int(y + h)]
             output.append(
                 {
                     "frame": frame_id,
-                    "class": cls_name,
+                    "class": int(cls_idx),
                     "track_id": obj.track_id,
                     "bbox": bbox,
                     "score": float(obj.score),
@@ -547,9 +549,10 @@ def track_detections(
 
     logger.info("Processed {} frames", len(frames))
     logger.info("Active tracks: {}", len(track_ids))
-    summary = {}
-    for cls in ("person", "ball"):
-        summary[cls] = sum(1 for t in output if t["class"] == cls)
+    summary = {
+        CLASS_ID_TO_NAME[cid]: sum(1 for t in output if t["class"] == cid)
+        for cid in (CLASS_NAME_TO_ID["person"], CLASS_NAME_TO_ID["ball"])
+    }
     logger.info("Track summary: {}", summary)
     logger.info(
         "Saved {} tracked detections to {}", len(output), output_json

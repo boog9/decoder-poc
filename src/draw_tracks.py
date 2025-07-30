@@ -31,6 +31,7 @@ from PIL import Image
 
 from .draw_roi import COCO_CLASS_NAMES, _label_color
 from .utils.draw_helpers import IMAGE_EXT, get_font, load_frames
+from .utils.classes import CLASS_ID_TO_NAME
 
 __all__ = ["IMAGE_EXT", "load_frames", "get_font", "visualize_tracks", "cli"]
 
@@ -163,10 +164,14 @@ def visualize_tracks(
             bbox = det.get("bbox", [0, 0, 0, 0])
             x1, y1, x2, y2 = map(int, bbox)
             track_id = int(det.get("track_id", -1))
-            class_name = det.get("class")
+            class_val = det.get("class")
+            if isinstance(class_val, int):
+                class_name = CLASS_ID_TO_NAME.get(class_val)
+            else:
+                class_name = str(class_val) if class_val is not None else None
 
             if palette == "coco":
-                color = _class_color(class_name)
+                color = _class_color(class_name if class_name is not None else -1)
             elif palette == "random":
                 rng = random.Random(track_id)
                 color = (rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255))
