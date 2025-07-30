@@ -65,10 +65,10 @@ def visualize_tracks(
     """Overlay tracking results on frames and save images or a video."""
 
     logger.info("Starting visualize_tracks()")
-    logger.info("\u2192 frames_dir = %s", frames_dir)
-    logger.info("\u2192 tracks_json = %s", tracks_json)
-    logger.info("\u2192 output_dir = %s", output_dir)
-    logger.info("\u2192 output_video = %s", output_video)
+    logger.info(f"\u2192 frames_dir = {frames_dir}")
+    logger.info(f"\u2192 tracks_json = {tracks_json}")
+    logger.info(f"\u2192 output_dir = {output_dir}")
+    logger.info(f"\u2192 output_video = {output_video}")
 
     if output_video and output_dir:
         raise ValueError("--output-dir and --output-video are mutually exclusive")
@@ -94,9 +94,9 @@ def visualize_tracks(
 
     frames = load_frames(frames_dir, max_frames)
     if not frames:
-        logger.warning("No valid frames found in %s", frames_dir)
+        logger.warning(f"No valid frames found in {frames_dir}")
         return
-    logger.info("Loaded %d frame(s) from %s", len(frames), frames_dir)
+    logger.info(f"Loaded {len(frames)} frame(s) from {frames_dir}")
 
     first_img = cv2.imread(str(frames[0]))
     if first_img is None:
@@ -130,11 +130,11 @@ def visualize_tracks(
         writer = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         assert writer.stdin is not None
         # first frame will be written in the main loop
-        logger.info("Output mode: writing video to %s at %gfps", output_video, fps)
+        logger.info(f"Output mode: writing video to {output_video} at {fps}fps")
     else:
         output_dir = output_dir or Path("frames_tracks")
         output_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Output mode: writing annotated frames to %s", output_dir)
+        logger.info(f"Output mode: writing annotated frames to {output_dir}")
 
     num_written = 0
     for idx, frame_path in enumerate(frames, start=1):
@@ -142,12 +142,12 @@ def visualize_tracks(
             logger.debug("Processing frame %d: %s", idx, frame_path)
         match = re.search(r"(\d+)", frame_path.stem)
         if not match:
-            logger.warning("No frame number found in %s", frame_path)
+            logger.warning(f"No frame number found in {frame_path}")
             continue
         frame_idx = int(match.group(1))
         img = cv2.imread(str(frame_path))
         if img is None:
-            logger.warning("cv2.imread failed for %s, trying PIL fallback", frame_path)
+            logger.warning(f"cv2.imread failed for {frame_path}, trying PIL fallback")
             try:
                 pil_img = Image.open(frame_path).convert("RGB")
                 img = np.array(pil_img)
@@ -202,20 +202,20 @@ def visualize_tracks(
             num_written += 1
 
         if idx % 100 == 0:
-            logger.info("Processed %d frames", idx)
+            logger.info(f"Processed {idx} frames")
 
     if writer:
         writer.stdin.close()
         writer.wait()
         if output_video.exists():
             logger.info(
-                "Finished writing %d frame(s) to video: %s", num_written, output_video
+                f"Finished writing {num_written} frame(s) to video: {output_video}"
             )
         else:
             logger.error("Expected output video not found at %s", output_video)
     else:
         logger.info(
-            "Finished writing %d frame(s) to %s", num_written, output_dir
+            f"Finished writing {num_written} frame(s) to {output_dir}"
         )
 
 
