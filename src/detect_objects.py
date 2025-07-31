@@ -263,9 +263,10 @@ def _load_model(model_name: str):
     try:
         exp_file = (
             Path(__file__).resolve().parents[1]
-            / "externals/ByteTrack/yolox/exps/default"
+            / "externals/ByteTrack/yolox/exp"
             / f"yolox_{variant}.py"
         )
+        LOGGER.debug(f"Using experiment file: {exp_file}")
         exp = get_exp_by_file(str(exp_file))
     except Exception as exc:  # pragma: no cover - missing exp file
         raise ImportError(
