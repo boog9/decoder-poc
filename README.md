@@ -230,8 +230,8 @@ The output ``tracks.json`` contains entries of the form:
 
 ```json
 [
-  {"frame": 1, "class": "person", "track_id": 5, "bbox": [x1, y1, x2, y2], "score": 0.93},
-  {"frame": 1, "class": "ball",   "track_id": 2, "bbox": [x1, y1, x2, y2], "score": 0.88}
+  {"frame": 1, "class": 0,  "track_id": 5, "bbox": [x1, y1, x2, y2], "score": 0.93},
+  {"frame": 1, "class": 32, "track_id": 2, "bbox": [x1, y1, x2, y2], "score": 0.88}
 ]
 ```
 
