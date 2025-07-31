@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from yolox.exp import get_exp_by_file
+import pytest
 
 
 def test_get_exp_by_file_loads_custom_exp(tmp_path: Path) -> None:
@@ -38,3 +39,19 @@ def test_get_exp_by_file_loads_custom_exp(tmp_path: Path) -> None:
     exp = get_exp_by_file(str(exp_file))
     assert exp.name == "custom"
     assert exp.get_model() == "model"
+
+
+def test_get_exp_by_file_missing_file(tmp_path: Path, capsys) -> None:
+    missing = tmp_path / "missing.py"
+    with pytest.raises(FileNotFoundError):
+        get_exp_by_file(str(missing))
+    assert "not found" in capsys.readouterr().out.lower()
+
+
+def test_get_exp_by_file_missing_class(tmp_path: Path, capsys) -> None:
+    exp_file = tmp_path / "noexp.py"
+    exp_file.write_text("print('hi')\n")
+    with pytest.raises(ImportError):
+        get_exp_by_file(str(exp_file))
+    out = capsys.readouterr().out.lower()
+    assert "does not define" in out or "doesn't contain" in out

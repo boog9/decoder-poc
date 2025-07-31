@@ -31,21 +31,33 @@ def get_exp_by_name(exp_name: str):
 
 
 def get_exp_by_file(exp_file: str):
-    """Load an :class:`Exp` from a Python file path."""
+    """Load an :class:`Exp` from a Python file path.
+
+    The module is loaded dynamically via :func:`importlib.util.spec_from_file_location`
+    using a fixed module name to avoid clashes with installed packages.
+    A warning is printed and an exception raised if the file or ``Exp`` class
+    cannot be found.
+    """
     exp_path = Path(exp_file).resolve()
     if not exp_path.exists():
+        print(f"[WARN] Experiment file not found: {exp_file}")
         raise FileNotFoundError(f"Experiment file not found: {exp_file}")
 
-    module_name = exp_path.stem
+    module_name = "custom_exp"
     spec = importlib.util.spec_from_file_location(module_name, str(exp_path))
     if spec is None or spec.loader is None:
+        print(f"[WARN] Failed to load experiment module from {exp_file}")
         raise ImportError(f"Cannot load spec from {exp_file}")
 
     module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
 
     if not hasattr(module, "Exp"):
+        print(f"[WARN] Module {exp_file} does not define 'Exp'")
         raise ImportError(f"{exp_file} doesn't contain class named 'Exp'")
 
     return module.Exp()
