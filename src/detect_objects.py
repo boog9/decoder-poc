@@ -249,7 +249,7 @@ def _load_model(model_name: str):
         raise ValueError(f"Unsupported model {model_name}")
 
     try:
-        from yolox.exp import get_exp
+        from yolox.exp.build import get_exp_by_file
         from yolox.utils import fuse_model
     except Exception as exc:  # pragma: no cover - missing submodule
         raise ImportError(
@@ -261,7 +261,12 @@ def _load_model(model_name: str):
     LOGGER.info("Loading %s", model_name)
 
     try:
-        exp = get_exp(f"yolox_{variant}.py", model_name)
+        exp_file = (
+            Path(__file__).resolve().parents[1]
+            / "externals/ByteTrack/yolox/exps/default"
+            / f"yolox_{variant}.py"
+        )
+        exp = get_exp_by_file(str(exp_file))
     except Exception as exc:  # pragma: no cover - missing exp file
         raise ImportError(
             f"Missing YOLOX experiment for {model_name}. "
