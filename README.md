@@ -320,6 +320,39 @@ python -m src.validate_detections sanity-check \
 
 This prints the number of invalid bounding boxes and low-confidence detections.
 
+## Detection Docker Image
+
+- **Service name:** `decoder-detect`
+- **Purpose:** Run YOLOX detection and optional ByteTrack tracking on a directory of frames.
+- **GPU:** Required; enable with `--gpus all`.
+- **Volumes:** Mount project directory to `/app` to access frames and outputs.
+- **Build:**
+
+  ```bash
+  docker build -f Dockerfile.detect -t decoder-detect:latest .
+  ```
+
+- **Run:**
+
+  ```bash
+  docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+      detect --frames-dir /app/frames --output-json /app/detections.json
+  ```
+
+- **Parameters:**
+
+  | Option | Description | Default |
+  | ------ | ----------- | ------- |
+  | `--frames-dir` | Input PNG/JPG frames directory | **required** |
+  | `--output-json` | Path to save detection results | **required** |
+  | `--model` | YOLOX model size (`yolox-s` ... `yolox-x`) | `yolox-s` |
+  | `--img-size` | Inference image size | `640` |
+  | `--conf-thres` | Confidence threshold | `0.3` |
+  | `--nms-thres` | NMS threshold | `0.45` |
+  | `--classes` | Filter by class IDs | none |
+
+Tracking mode is available via `python -m src.detect_objects track` inside the container.
+
 ## Single Image Detection Demo
 
 A small container is provided to run YOLOX on a single image. Build it with:
