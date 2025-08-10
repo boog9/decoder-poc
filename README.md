@@ -188,7 +188,7 @@ Run detection inside the container (assumes frames are in ``./frames``):
 
 ```bash
 docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
-    --frames-dir frames/ \
+    detect --frames-dir frames/ \
     --output-json detections.json \
     --model yolox-s \
     --img-size 640 \
@@ -196,6 +196,10 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --nms-thres 0.45 \
     --classes 0 32
 ```
+
+> **Note:** the image already has ENTRYPOINT `python -m src.detect_objects`.
+> Do not prefix the command with `python`; the first argument must be the
+> subcommand `detect` or `track`.
 
 Example ``detections.json`` output:
 
