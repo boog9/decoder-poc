@@ -268,8 +268,13 @@ def _load_model(model_name: str):
         from yolox.exp import get_exp
         from yolox.utils import fuse_model
     except Exception as exc:  # pragma: no cover - missing package
+        msg = str(exc)
+        if "No module named 'thop'" in msg:
+            raise ImportError(
+                "YOLOX requires 'thop'. Add `thop>=0.1.1` to requirements and rebuild."
+            ) from exc
         raise ImportError(
-            "YOLOX modules not found. Install YOLOX from the official repository."
+            "YOLOX modules not found. Ensure official 'yolox' is installed."
         ) from exc
 
     variant = model_name.split("-", 1)[-1]

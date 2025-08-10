@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       (pip3 install --no-deps "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@${YOLOX_REF}" \
        || (echo "[warn] YOLOX ref '${YOLOX_REF}' not found, falling back to 'main'" && \
            pip3 install --no-deps "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@main")) && \
-      python - <<'PY' || true
+        bash -lc "python - <<'PY' || { echo '[warn] YOLOX smoke-check failed (non-fatal)'; exit 0; }
 import importlib, inspect
 import torch, torchvision
 print('torch:', torch.__version__, '| torchvision:', torchvision.__version__)
@@ -43,7 +43,7 @@ try:
     print('get_exp available:', True)
 except Exception as e:
     print('get_exp import failed:', e)
-PY
+PY"
 
 WORKDIR /app
 COPY . /app
