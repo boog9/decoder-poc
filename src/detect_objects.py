@@ -88,6 +88,22 @@ _YOLOX_MODEL_MAP = {
 _det_index: dict[tuple[int, int], dict] = {}
 
 
+# Helper: extract numeric frame id from various forms ("frame_000123.png" -> 123)
+def _extract_frame_id(val) -> int | None:
+    m = re.findall(r"\d+", str(val))
+    return int(m[-1]) if m else None
+
+
+# Helper: normalize & validate bbox -> returns list[float] of length 4 or None
+def _normalize_bbox(b) -> list[float] | None:
+    if not isinstance(b, (list, tuple)) or len(b) != 4:
+        return None
+    try:
+        return [float(v) for v in b]
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for detection and tracking."""
 
@@ -488,9 +504,15 @@ def track_detections(
 ) -> None:
     """Run ByteTrack on detection results and write tracks.
 
-    The ``detections_json`` file is expected to contain a flat list where each
-    element has ``frame``, ``class``, ``bbox`` and ``score`` fields. The output
-    ``tracks.json`` will store one entry per frame with the assigned ``track_id``.
+    The ``detections_json`` file may contain detections in one of two formats:
+
+    * **Nested format (A)** – a list of frame objects where each item has a
+      ``frame`` key and an inner ``detections`` list with detection dictionaries.
+    * **Flat format (B)** – a list where each element directly contains the
+      ``frame``, ``class``, ``bbox`` and ``score`` fields.
+
+    The output ``tracks.json`` stores one entry per detection with an assigned
+    ``track_id``.
     """
 
     if BYTETracker is None:
@@ -508,32 +530,90 @@ def track_detections(
 
     _det_index.clear()
     frames: Dict[int, list[dict]] = {}
-    for det in sorted(raw, key=lambda x: x["frame"]):
-        frame_match = re.search(r"\d+", str(det["frame"]))
-        if not frame_match:
-            LOGGER.debug(
-                "Skipping detection with invalid frame: %s", det["frame"]
-            )
-            continue
-        frame_id = int(frame_match.group())
-        cls_val = det.get("class")
-        if isinstance(cls_val, str):
-            cls_key = CLASS_ALIASES.get(cls_val, cls_val)
-            if cls_key not in CLASS_NAME_TO_ID:
+    for item in raw:
+        if "detections" in item:
+            frame_id = _extract_frame_id(item.get("frame"))
+            if frame_id is None:
+                LOGGER.debug("Skip: invalid frame value (nested): %s", item.get("frame"))
                 continue
-            cls_id = CLASS_NAME_TO_ID[cls_key]
+            frame_list = frames.setdefault(frame_id, [])
+            for det in item.get("detections", []):
+                cls_val = det.get("class")
+                if isinstance(cls_val, int):
+                    if cls_val not in CLASS_ID_TO_NAME:
+                        LOGGER.debug(
+                            "Skip: unknown int class %s (frame %s)", cls_val, frame_id
+                        )
+                        continue
+                    cls_id = cls_val
+                else:
+                    name = str(cls_val)
+                    cls_name = CLASS_ALIASES.get(name, name)
+                    if cls_name not in CLASS_NAME_TO_ID:
+                        LOGGER.debug(
+                            "Skip: unknown class name %s (frame %s)", cls_name, frame_id
+                        )
+                        continue
+                    cls_id = CLASS_NAME_TO_ID[cls_name]
+                score = float(det.get("score", 0.0))
+                if score < min_score:
+                    LOGGER.debug(
+                        "Skip: score %.3f < min_score (frame %s)", score, frame_id
+                    )
+                    continue
+                bbox = _normalize_bbox(det.get("bbox"))
+                if bbox is None:
+                    LOGGER.debug(
+                        "Skip: invalid bbox for frame %s: %s", frame_id, det.get("bbox")
+                    )
+                    continue
+                idx = len(frame_list)
+                entry = {"bbox": bbox, "score": score, "class": cls_id}
+                frame_list.append(entry)
+                _det_index[(frame_id, idx)] = entry
+        elif "class" in item:
+            frame_id = _extract_frame_id(item.get("frame"))
+            if frame_id is None:
+                LOGGER.debug("Skip: invalid frame value (flat): %s", item.get("frame"))
+                continue
+            cls_val = item.get("class")
+            if isinstance(cls_val, str):
+                cls_key = CLASS_ALIASES.get(cls_val, cls_val)
+                if cls_key not in CLASS_NAME_TO_ID:
+                    LOGGER.debug(
+                        "Skip: unknown class name %s (frame %s)", cls_key, frame_id
+                    )
+                    continue
+                cls_id = CLASS_NAME_TO_ID[cls_key]
+            else:
+                cls_id = int(cls_val)
+                if cls_id not in CLASS_ID_TO_NAME:
+                    LOGGER.debug(
+                        "Skip: unknown int class %s (frame %s)", cls_id, frame_id
+                    )
+                    continue
+            score = float(item.get("score", 0.0))
+            if score < min_score:
+                LOGGER.debug(
+                    "Skip: score %.3f < min_score (frame %s)", score, frame_id
+                )
+                continue
+            bbox = _normalize_bbox(item.get("bbox"))
+            if bbox is None:
+                LOGGER.debug(
+                    "Skip: invalid bbox for frame %s: %s", frame_id, item.get("bbox")
+                )
+                continue
+            frame_list = frames.setdefault(frame_id, [])
+            idx = len(frame_list)
+            entry = {"bbox": bbox, "score": score, "class": cls_id}
+            frame_list.append(entry)
+            _det_index[(frame_id, idx)] = entry
         else:
-            cls_id = int(cls_val)
-            if cls_id not in CLASS_ID_TO_NAME:
-                continue
-        score = float(det.get("score", 0.0))
-        if score < min_score:
-            continue
-        bbox = [float(v) for v in det["bbox"]]
-        idx = len(frames.setdefault(frame_id, []))
-        entry = {"bbox": bbox, "score": score, "class": cls_id}
-        frames[frame_id].append(entry)
-        _det_index[(frame_id, idx)] = entry
+            raise ValueError(
+                "Unknown detections-json format: each item must contain either"
+                " 'detections' or 'class'"
+            )
 
     # Create tracker instance with recommended parameters.
     tracker = BYTETracker(

@@ -233,7 +233,9 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
         def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
             self.track_id = tid
             self.tlwh = tlwh
+            self._tlwh = tlwh
             self.score = score
+            self.cls = 0
 
     class DummyTracker:
         def __init__(self, *a, **k) -> None:
@@ -253,6 +255,7 @@ def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:
             return out
 
     monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    monkeypatch.setattr(dobj, "_bbox_iou", lambda a, b: 1.0)
 
     det_json = tmp_path / "det.json"
     det_json.write_text(
@@ -278,13 +281,32 @@ def test_track_detections_iou_matching(tmp_path: Path, monkeypatch) -> None:
         def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
             self.track_id = tid
             self.tlwh = tlwh
+            self._tlwh = tlwh
             self.score = score
 
     class DummyTracker:
+        def __init__(self, *a, **k) -> None:
+            pass
+
         def update(self, tlwhs, scores, classes, frame_id):
             return [DummyObj(5, tlwhs[1], scores[1])]
 
     monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    def _simple_iou(a, b):
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter = inter_w * inter_h
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union = area_a + area_b - inter
+        return inter / union if union else 0.0
+    monkeypatch.setattr(dobj, "_bbox_iou", _simple_iou)
 
     det_json = tmp_path / "det.json"
     det_json.write_text(
@@ -307,7 +329,9 @@ def test_track_detections_string_frame(tmp_path: Path, monkeypatch) -> None:
         def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
             self.track_id = tid
             self.tlwh = tlwh
+            self._tlwh = tlwh
             self.score = score
+            self.cls = 0
 
     class DummyTracker:
         def __init__(self, *a, **k) -> None:
@@ -327,6 +351,7 @@ def test_track_detections_string_frame(tmp_path: Path, monkeypatch) -> None:
             return out
 
     monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    monkeypatch.setattr(dobj, "_bbox_iou", lambda a, b: 1.0)
 
     det_json = tmp_path / "det.json"
     det_json.write_text(
@@ -345,6 +370,120 @@ def test_track_detections_string_frame(tmp_path: Path, monkeypatch) -> None:
 
     assert len(out) == 2
     assert out[0]["frame"] == 1 and out[1]["frame"] == 2
+
+
+def test_track_detections_nested_format(tmp_path: Path, monkeypatch) -> None:
+    class DummyObj:
+        def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
+            self.track_id = tid
+            self.tlwh = tlwh
+            self._tlwh = tlwh
+            self.score = score
+            self.cls = 32
+
+    class DummyTracker:
+        def __init__(self, *a, **k) -> None:
+            self.last: dict[tuple[float, float, float, float], int] = {}
+            self.next_id = 1
+
+        def update(self, tlwhs, scores, classes, frame_id):
+            out = []
+            for tlwh, score in zip(tlwhs, scores):
+                key = tuple(tlwh)
+                tid = self.last.get(key)
+                if tid is None:
+                    tid = self.next_id
+                    self.next_id += 1
+                    self.last[key] = tid
+                out.append(DummyObj(tid, tlwh, score))
+            return out
+
+    monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    monkeypatch.setattr(dobj, "_bbox_iou", lambda a, b: 1.0)
+
+    det_json = tmp_path / "det.json"
+    det_json.write_text(
+        json.dumps(
+            [
+                {
+                    "frame": "frame_000001.png",
+                    "detections": [
+                        {"class": 32, "bbox": [0, 0, 2, 2], "score": 0.9}
+                    ],
+                },
+                {
+                    "frame": "frame_000002.png",
+                    "detections": [
+                        {
+                            "class": "sports ball",
+                            "bbox": [0, 0, 2, 2],
+                            "score": 0.9,
+                        }
+                    ],
+                },
+            ]
+        )
+    )
+    out_json = tmp_path / "out.json"
+    dobj.track_detections(det_json, out_json, 0.3)
+
+    with out_json.open() as fh:
+        out = json.load(fh)
+
+    assert len(out) == 2
+    assert out[0]["frame"] == 1 and out[1]["frame"] == 2
+    assert out[0]["class"] == out[1]["class"] == 32
+    assert out[0]["track_id"] == out[1]["track_id"]
+
+
+def test_track_detections_skips_invalid_items(tmp_path: Path, monkeypatch) -> None:
+    class DummyObj:
+        def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
+            self.track_id = tid
+            self.tlwh = tlwh
+            self._tlwh = tlwh
+            self.score = score
+            self.cls = 0
+
+    class DummyTracker:
+        def __init__(self, *a, **k) -> None:
+            self.next_id = 1
+
+        def update(self, tlwhs, scores, classes, frame_id):
+            out = []
+            for tlwh, score in zip(tlwhs, scores):
+                out.append(DummyObj(self.next_id, tlwh, score))
+                self.next_id += 1
+            return out
+
+    monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    monkeypatch.setattr(dobj, "_bbox_iou", lambda a, b: 1.0)
+
+    det_json = tmp_path / "det_nested.json"
+    det_json.write_text(
+        json.dumps(
+            [
+                {
+                    "frame": "frame_000001.png",
+                    "detections": [
+                        {"bbox": [0, 0, 10], "score": 0.9, "class": 0},
+                        {"bbox": [0, 0, 2, 2], "score": 0.9},
+                        {"bbox": [0, 0, 2, 2], "score": 0.9, "class": 0},
+                    ],
+                }
+            ]
+        )
+    )
+    out_json = tmp_path / "out.json"
+    dobj.track_detections(det_json, out_json, 0.3)
+
+    with out_json.open() as fh:
+        out = json.load(fh)
+
+    assert len(out) == 1
+    assert out[0]["frame"] == 1
+    assert out[0]["class"] == 0
+    assert out[0]["track_id"] == 1
 
 
 def test_update_tracker_mot_two_params() -> None:

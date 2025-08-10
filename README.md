@@ -226,6 +226,19 @@ python -m src.detect_objects track \
 * ``--output-json`` – destination for the tracked results.
 * ``--min-score`` – detection score threshold (default: ``0.3``).
 
+The detections file may use either of the following schemas:
+
+1. Nested per-frame structure:
+   `[{"frame": "frame_000001.png", "detections": [{...}]}]`
+2. Flat list of detections:
+   `[{"frame": 1, "class": "person", "bbox": [..], "score": 0.9}]`
+
+Both formats are parsed automatically.
+
+**BBox format:** each `bbox` must be `[x1, y1, x2, y2]` (XYXY, pixels).
+
+**Class field:** accepts COCO IDs or strings like `"person"`, `"sports ball"` (alias `"ball"`).
+
 The output ``tracks.json`` contains entries of the form:
 
 ```json
