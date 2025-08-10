@@ -62,19 +62,12 @@ np_mod.asarray = lambda a, dtype=None: a
 np_mod.concatenate = lambda arrs, axis=0: sum(arrs, [])
 np_mod.float32 = "float32"
 sys.modules.setdefault("numpy", np_mod)
-# dummy ByteTrack module for dynamic import
-bt_mod = types.ModuleType("yolox.tracker.byte_tracker")
-
-class _DummyBT:
-    def __init__(self, *a, **k):
-        pass
-
-setattr(bt_mod, "BYTETracker", _DummyBT)
-sys.modules.setdefault("yolox", types.ModuleType("yolox"))
-sys.modules.setdefault("yolox.tracker", types.ModuleType("yolox.tracker"))
-sys.modules["yolox.tracker.byte_tracker"] = bt_mod
+yolox_mod = sys.modules.setdefault("yolox", types.ModuleType("yolox"))
+setattr(yolox_mod, "__version__", "0.0")
 
 import src.detect_objects as dobj
+
+dobj.torch.cuda.is_available = lambda: True
 
 
 def test_parse_args_defaults() -> None:
@@ -110,7 +103,7 @@ def test_parse_args_custom_classes() -> None:
 def test_load_model_uses_local_yolox(monkeypatch) -> None:
     recorded = {}
 
-    def fake_get_exp(exp_file: str, exp_name: str):
+    def fake_get_exp(exp_file: str | None = None, exp_name: str | None = None):
         recorded["exp_file"] = exp_file
         recorded["exp_name"] = exp_name
 
@@ -151,7 +144,7 @@ def test_load_model_uses_local_yolox(monkeypatch) -> None:
 
     dobj._load_model("yolox-s")
 
-    assert recorded["exp_file"].endswith("yolox_s.py")
+    assert recorded["exp_name"] == "yolox_s"
     assert recorded["ckpt"].endswith("weights/yolox_s.pth")
     assert recorded.get("fused")
     assert recorded.get("device") == "cuda"

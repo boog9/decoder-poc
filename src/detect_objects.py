@@ -19,10 +19,10 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
-import logging
+import os
 import time
 from pathlib import Path
-from typing import Iterable, List, Tuple, Sequence, Dict
+from typing import Dict, Iterable, List, Sequence, Tuple
 import re
 
 try:
@@ -33,24 +33,18 @@ except Exception:  # pragma: no cover - optional dependency
 import numpy as np
 
 from loguru import logger
-import os
-import sys
 
 from .utils.classes import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
 
-# Add ByteTrack root to ``sys.path`` once and import ``BYTETracker`` normally.
-# The tracker module lives under ``yolox.tracker.byte_tracker`` in the bundled
-# repository at ``externals/ByteTrack``.
-BT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../externals/ByteTrack")
-)
-if BT_ROOT not in sys.path:
-    sys.path.insert(0, BT_ROOT)
-try:
-    from yolox.tracker.byte_tracker import BYTETracker
-except Exception as exc:  # pragma: no cover - optional dependency
-    logger.error("Could not import BYTETracker: {}", exc)
-    BYTETracker = None
+# BYTETracker is imported lazily to avoid adding the vendored tracker to the
+# Python path when running detection-only workloads.
+BYTETracker = None
+
+
+def _is_track_container() -> bool:
+    """Return ``True`` when running inside the tracking image."""
+
+    return "externals/ByteTrack" in os.environ.get("PYTHONPATH", "")
 
 from PIL import Image
 from tqdm import tqdm
@@ -58,16 +52,19 @@ from tqdm import tqdm
 import torch
 
 try:
+    from yolox.data.data_augment import ValTransform as _VT
+
+    _VT_HAS_LEGACY = "legacy" in inspect.signature(_VT.__init__).parameters
+except Exception:  # pragma: no cover - optional dependency
+    _VT = None  # type: ignore
+    _VT_HAS_LEGACY = False
+
+try:
     from yolox.data.datasets import COCO_CLASSES
 
     YOLOX_NUM_CLASSES = len(COCO_CLASSES)
 except Exception:  # pragma: no cover - optional dependency
     YOLOX_NUM_CLASSES = 80
-
-if not torch.cuda.is_available():
-    raise RuntimeError("CUDA device required for YOLOX")
-
-LOGGER = logging.getLogger(__name__)
 
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
@@ -108,7 +105,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for detection and tracking."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=False)
+    sub = parser.add_subparsers(dest="cmd", required=False)
 
     # Detection subcommand (default)
     det = sub.add_parser("detect", help="Run YOLOX detection")
@@ -132,8 +129,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
 
     # Default to ``detect`` when no subcommand is supplied.
-    if args.command is None:
-        args.command = "detect"
+    if args.cmd is None:
+        args.cmd = "detect"
     return args
 
 
@@ -259,36 +256,26 @@ def _bbox_iou(b1: Sequence[float], b2: Sequence[float]) -> float:
 
 
 def _load_model(model_name: str):
-    """Load a YOLOX model from the local ByteTrack implementation."""
+    """Load a YOLOX model using the official package."""
+
+    if not torch.cuda.is_available():  # pragma: no cover
+        raise RuntimeError("CUDA device required for YOLOX detection")
 
     if model_name not in YOLOX_MODELS:
         raise ValueError(f"Unsupported model {model_name}")
 
     try:
-        from yolox.exp.build import get_exp_by_file
+        from yolox.exp import get_exp
         from yolox.utils import fuse_model
-    except Exception as exc:  # pragma: no cover - missing submodule
+    except Exception as exc:  # pragma: no cover - missing package
         raise ImportError(
-            "YOLOX modules not found. Did you clone the ByteTrack submodule and "
-            "run 'bash build_externals.sh'?"
+            "YOLOX modules not found. Install YOLOX from the official repository."
         ) from exc
 
     variant = model_name.split("-", 1)[-1]
-    LOGGER.info("Loading %s", model_name)
+    logger.info("Loading {}", model_name)
 
-    try:
-        exp_file = (
-            Path(__file__).resolve().parents[1]
-            / "externals/ByteTrack/yolox/exp"
-            / f"yolox_{variant}.py"
-        )
-        LOGGER.debug(f"Using experiment file: {exp_file}")
-        exp = get_exp_by_file(str(exp_file))
-    except Exception as exc:  # pragma: no cover - missing exp file
-        raise ImportError(
-            f"Missing YOLOX experiment for {model_name}. "
-            "Did you fetch the ByteTrack submodule with 'git submodule update --init --recursive'?"
-        ) from exc
+    exp = get_exp(exp_name=f"yolox_{variant}")
     model = exp.get_model()
     weights_dir = Path(__file__).resolve().parents[1] / "weights"
     ckpt_path = weights_dir / f"yolox_{variant}.pth"
@@ -299,7 +286,7 @@ def _load_model(model_name: str):
     ckpt = torch.load(ckpt_path, map_location="cpu")
     model.load_state_dict(ckpt["model"])
     model = fuse_model(model)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda")
     return model.eval().to(device)
 
 
@@ -330,15 +317,17 @@ def _preprocess_image(
     """
 
     import cv2  # defer heavy import
-    from yolox.data.data_augment import ValTransform
 
     img = cv2.imread(str(path))
     if img is None:
         raise FileNotFoundError(f"Cannot read {path}")
 
+    if _VT is None:  # pragma: no cover - detection requires YOLOX
+        raise ImportError("yolox is required for detection")
+
     h0, w0 = img.shape[:2]
 
-    preproc = ValTransform(legacy=False)
+    preproc = _VT(legacy=False) if _VT_HAS_LEGACY else _VT()
     img_processed, _ = preproc(img, None, (size, size))
 
     _, new_h, new_w = img_processed.shape
@@ -398,6 +387,9 @@ def detect_folder(
         model_name: Variant name of the YOLOX model to load.
         img_size: Target input size for the model.
     """
+    if not torch.cuda.is_available():  # pragma: no cover
+        raise RuntimeError("CUDA device required for YOLOX detection")
+
     if class_ids is None:
         class_ids = list(range(YOLOX_NUM_CLASSES))
     model = _load_model(model_name)
@@ -409,7 +401,7 @@ def detect_folder(
         ]
     )
     if not frames:
-        LOGGER.warning("No frames found in %s", frames_dir)
+        logger.warning("No frames found in {}", frames_dir)
         return
 
     out: List[dict] = []
@@ -476,8 +468,8 @@ def detect_folder(
                         }
                     )
                 else:
-                    LOGGER.debug(
-                        "Discarded invalid box %s from %s",
+                    logger.debug(
+                        "Discarded invalid box {} from {}",
                         [x0, y0, x1, y1],
                         frame.name,
                     )
@@ -487,12 +479,12 @@ def detect_folder(
     elapsed = time.perf_counter() - start
 
     free, total = torch.cuda.mem_get_info()
-    LOGGER.info(
-        "GPU memory: %.2f/%.2f GB used",
+    logger.info(
+        "GPU memory: {:.2f}/{:.2f} GB used",
         (total - free) / 1024**3,
         total / 1024**3,
     )
-    LOGGER.info("Processed %d frames in %.2fs", len(frames), elapsed)
+    logger.info("Processed {} frames in {:.2f}s", len(frames), elapsed)
 
     out_json.parent.mkdir(parents=True, exist_ok=True)
     with out_json.open("w") as f:
@@ -515,12 +507,17 @@ def track_detections(
     ``track_id``.
     """
 
+    global BYTETracker
     if BYTETracker is None:
-        raise ImportError(
-            "BYTETracker import failed. Make sure you have run:\n"
-            "  pip install -r requirements.txt   # adds scipy\n"
-            "  bash build_externals.sh           # compiles yolox C-extension\n"
-        )
+        try:
+            from bytetrack_vendor.tracker.byte_tracker import BYTETracker as _BT
+        except Exception as exc:
+            raise ImportError(
+                "BYTETracker import failed. Make sure you have run:\n"
+                "  pip install -r requirements.txt   # adds scipy\n"
+                "  bash build_externals.sh           # compiles yolox C-extension\n"
+            ) from exc
+        BYTETracker = _BT
 
     with detections_json.open() as fh:
         raw = json.load(fh)
@@ -534,15 +531,19 @@ def track_detections(
         if "detections" in item:
             frame_id = _extract_frame_id(item.get("frame"))
             if frame_id is None:
-                LOGGER.debug("Skip: invalid frame value (nested): %s", item.get("frame"))
+                logger.debug(
+                    "Skip: invalid frame value (nested): {}", item.get("frame")
+                )
                 continue
             frame_list = frames.setdefault(frame_id, [])
             for det in item.get("detections", []):
                 cls_val = det.get("class")
                 if isinstance(cls_val, int):
                     if cls_val not in CLASS_ID_TO_NAME:
-                        LOGGER.debug(
-                            "Skip: unknown int class %s (frame %s)", cls_val, frame_id
+                        logger.debug(
+                            "Skip: unknown int class {} (frame {})",
+                            cls_val,
+                            frame_id,
                         )
                         continue
                     cls_id = cls_val
@@ -550,21 +551,27 @@ def track_detections(
                     name = str(cls_val)
                     cls_name = CLASS_ALIASES.get(name, name)
                     if cls_name not in CLASS_NAME_TO_ID:
-                        LOGGER.debug(
-                            "Skip: unknown class name %s (frame %s)", cls_name, frame_id
+                        logger.debug(
+                            "Skip: unknown class name {} (frame {})",
+                            cls_name,
+                            frame_id,
                         )
                         continue
                     cls_id = CLASS_NAME_TO_ID[cls_name]
                 score = float(det.get("score", 0.0))
                 if score < min_score:
-                    LOGGER.debug(
-                        "Skip: score %.3f < min_score (frame %s)", score, frame_id
+                    logger.debug(
+                        "Skip: score {:.3f} < min_score (frame {})",
+                        score,
+                        frame_id,
                     )
                     continue
                 bbox = _normalize_bbox(det.get("bbox"))
                 if bbox is None:
-                    LOGGER.debug(
-                        "Skip: invalid bbox for frame %s: %s", frame_id, det.get("bbox")
+                    logger.debug(
+                        "Skip: invalid bbox for frame {}: {}",
+                        frame_id,
+                        det.get("bbox"),
                     )
                     continue
                 idx = len(frame_list)
@@ -574,34 +581,42 @@ def track_detections(
         elif "class" in item:
             frame_id = _extract_frame_id(item.get("frame"))
             if frame_id is None:
-                LOGGER.debug("Skip: invalid frame value (flat): %s", item.get("frame"))
+                logger.debug("Skip: invalid frame value (flat): {}", item.get("frame"))
                 continue
             cls_val = item.get("class")
             if isinstance(cls_val, str):
                 cls_key = CLASS_ALIASES.get(cls_val, cls_val)
                 if cls_key not in CLASS_NAME_TO_ID:
-                    LOGGER.debug(
-                        "Skip: unknown class name %s (frame %s)", cls_key, frame_id
+                    logger.debug(
+                        "Skip: unknown class name {} (frame {})",
+                        cls_key,
+                        frame_id,
                     )
                     continue
                 cls_id = CLASS_NAME_TO_ID[cls_key]
             else:
                 cls_id = int(cls_val)
                 if cls_id not in CLASS_ID_TO_NAME:
-                    LOGGER.debug(
-                        "Skip: unknown int class %s (frame %s)", cls_id, frame_id
+                    logger.debug(
+                        "Skip: unknown int class {} (frame {})",
+                        cls_id,
+                        frame_id,
                     )
                     continue
             score = float(item.get("score", 0.0))
             if score < min_score:
-                LOGGER.debug(
-                    "Skip: score %.3f < min_score (frame %s)", score, frame_id
+                logger.debug(
+                    "Skip: score {:.3f} < min_score (frame {})",
+                    score,
+                    frame_id,
                 )
                 continue
             bbox = _normalize_bbox(item.get("bbox"))
             if bbox is None:
-                LOGGER.debug(
-                    "Skip: invalid bbox for frame %s: %s", frame_id, item.get("bbox")
+                logger.debug(
+                    "Skip: invalid bbox for frame {}: {}",
+                    frame_id,
+                    item.get("bbox"),
                 )
                 continue
             frame_list = frames.setdefault(frame_id, [])
@@ -626,7 +641,7 @@ def track_detections(
     track_ids = set()
     for frame_id in sorted(frames):
         dets = frames[frame_id]
-        LOGGER.debug("Frame %s: %s detections", frame_id, len(dets))
+        logger.debug("Frame {}: {} detections", frame_id, len(dets))
         tlwhs = [
             [b[0], b[1], b[2] - b[0], b[3] - b[1]]
             for b in (d["bbox"] for d in dets)
@@ -634,7 +649,7 @@ def track_detections(
         scores = [d["score"] for d in dets]
         classes = [d["class"] for d in dets]
         online = _update_tracker(tracker, tlwhs, scores, classes, frame_id)
-        LOGGER.debug("Frame %s: %s tracks", frame_id, len(online))
+        logger.debug("Frame {}: {} tracks", frame_id, len(online))
 
         frame_det_map = {
             idx: det
@@ -659,15 +674,15 @@ def track_detections(
             if best_idx is not None and best_iou > 0.3:
                 _det_index[(frame_id, best_idx)]["track_id"] = obj.track_id
                 used_dets.add(best_idx)
-                LOGGER.debug(
-                    "Assigned track_id %s to det #%s (IoU=%.2f)",
+                logger.debug(
+                    "Assigned track_id {} to det #{} (IoU={:.2f})",
                     obj.track_id,
                     best_idx,
                     best_iou,
                 )
             else:
-                LOGGER.warning(
-                    "No matching detection found for track %s at frame %s",
+                logger.warning(
+                    "No matching detection found for track {} at frame {}",
                     obj.track_id,
                     frame_id,
                 )
@@ -710,12 +725,21 @@ def track_detections(
 
 def main(argv: Iterable[str] | None = None) -> None:
     """CLI entrypoint."""
-    args = parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s"
-    )
 
-    if args.command == "track":
+    args = parse_args(argv)
+
+    if getattr(args, "cmd", None) in (None, "detect") and _is_track_container():
+        logger.warning(
+            "You're running detection inside the tracking image. "
+            "Consider using `decoder-detect` for smaller/faster env."
+        )
+    if getattr(args, "cmd", None) == "track" and not _is_track_container():
+        logger.warning(
+            "You're running tracking outside the tracking image. "
+            "Consider using `decoder-track` to avoid dependency conflicts."
+        )
+
+    if args.cmd == "track":
         try:
             track_detections(
                 args.detections_json, args.output_json, args.min_score
@@ -735,7 +759,7 @@ def main(argv: Iterable[str] | None = None) -> None:
                 args.classes,
             )
         except Exception as exc:  # pragma: no cover - top level
-            LOGGER.exception("Detection failed")
+            logger.exception("Detection failed")
             raise SystemExit(1) from exc
 
 

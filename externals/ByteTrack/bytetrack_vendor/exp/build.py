@@ -22,11 +22,11 @@ from .default import *  # noqa: F401,F403
 
 
 def get_exp_by_name(exp_name: str):
-    """Load an :class:`Exp` given its name within ``yolox.exps.default``."""
-    import yolox
+    """Load an :class:`Exp` given its name within ``bytetrack_vendor.exp.default``."""
+    import bytetrack_vendor
 
-    yolox_path = os.path.dirname(yolox.__file__)
-    exp_path = os.path.join(yolox_path, "exps", "default", exp_name + ".py")
+    pkg_path = os.path.dirname(bytetrack_vendor.__file__)  # type: ignore[name-defined]
+    exp_path = os.path.join(pkg_path, "exp", "default", exp_name + ".py")
     return get_exp_by_file(exp_path)
 
 
