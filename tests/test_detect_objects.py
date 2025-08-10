@@ -486,6 +486,68 @@ def test_track_detections_skips_invalid_items(tmp_path: Path, monkeypatch) -> No
     assert out[0]["track_id"] == 1
 
 
+def test_track_detections_flat_skips_invalid_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class DummyObj:
+        def __init__(self, tid: int, tlwh: list[float], score: float) -> None:
+            self.track_id = tid
+            self.tlwh = tlwh
+            self._tlwh = tlwh
+            self.score = score
+            self.cls = 0
+
+    class DummyTracker:
+        def __init__(self, *a, **k) -> None:
+            self.next_id = 1
+
+        def update(self, tlwhs, scores, classes, frame_id):
+            out = []
+            for tlwh, score in zip(tlwhs, scores):
+                out.append(DummyObj(self.next_id, tlwh, score))
+                self.next_id += 1
+            return out
+
+    monkeypatch.setattr(dobj, "BYTETracker", DummyTracker)
+    monkeypatch.setattr(dobj, "_bbox_iou", lambda a, b: 1.0)
+
+    det_json = tmp_path / "det_flat.json"
+    det_json.write_text(
+        json.dumps(
+            [
+                {
+                    "frame": "frame_000001.png",
+                    "class": 0,
+                    "bbox": [0, 0, 10],
+                    "score": 0.9,
+                },
+                {
+                    "frame": "frame_000001.png",
+                    "class": "banana",
+                    "bbox": [0, 0, 2, 2],
+                    "score": 0.9,
+                },
+                {
+                    "frame": "frame_000001.png",
+                    "class": 0,
+                    "bbox": [0, 0, 2, 2],
+                    "score": 0.9,
+                },
+            ]
+        )
+    )
+    out_json = tmp_path / "out.json"
+    dobj.track_detections(det_json, out_json, 0.3)
+
+    with out_json.open() as fh:
+        out = json.load(fh)
+
+    assert len(out) == 1
+    assert out[0]["frame"] == 1
+    assert out[0]["class"] == 0
+    assert out[0]["track_id"] == 1
+
+
 def test_update_tracker_mot_two_params() -> None:
     class DummyTracker:
         def __init__(self) -> None:

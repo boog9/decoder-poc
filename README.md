@@ -234,6 +234,7 @@ The detections file may use either of the following schemas:
    `[{"frame": 1, "class": "person", "bbox": [..], "score": 0.9}]`
 
 Both formats are parsed automatically.
+Frame IDs are derived from the last group of digits in the `frame` value (e.g., `frame_000123.png` → `123`), eliminating 0/1-based ambiguity.
 
 **BBox format:** each `bbox` must be `[x1, y1, x2, y2]` (XYXY, pixels).
 
