@@ -37,33 +37,34 @@ git submodule update --init --recursive
 ## Setup
 
 Install the system dependencies and Python packages, then fetch the
-``ByteTrack`` submodule and build its native extensions.
+``ByteTrack`` submodule and verify the vendored tracker.
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake ninja-build libopencv-dev python3-dev
+sudo apt install -y build-essential cmake ninja-build python3-dev
 git submodule update --init --recursive
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt
 python -m pip install pytest
-bash build_externals.sh
+bash build_externals.sh  # sanity-check ByteTrack vendor only
 make test
 ```
 
 ### External Dependencies
 
-Build the vendored ByteTrack tracker:
+Verify the vendored ByteTrack tracker:
 
 ```bash
 git submodule update --init --recursive
 bash build_externals.sh
+# the script only checks that the ByteTrack vendor code is present
 ```
 
 If `build_externals.sh` exits with the message:
 
 ```
-ByteTrack submodule not found.
-Run 'git submodule update --init --recursive' first.
+ByteTrack vendor not found at /path/to/externals/ByteTrack/bytetrack_vendor
+Run: git submodule update --init --recursive
 ```
 
 the repository was cloned without the ByteTrack code. Re-fetch the submodule or clone it manually:
@@ -170,8 +171,13 @@ python -m src.detect_objects track \
 To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
 
 ```bash
-docker build -f Dockerfile.detect -t decoder-detect:latest --progress=plain .
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest \
+    --build-arg YOLOX_COMMIT=0d6e2ed2a9c7f1dca5d4e0754e40d0089f4d2a63 \
+    --progress=plain .
 ```
+
+The `YOLOX_COMMIT` build argument allows pinning a specific revision of the
+official `yolox` repository.
 
 Run detection inside the container (assumes frames are in ``./frames``):
 
@@ -212,7 +218,10 @@ GitHub repository to avoid issues with the PyPI release.
 
 After running detection you can generate consistent tracks for each
 ``person`` and ``ball`` class using ByteTrack. The tracker is vendored in
-``externals/ByteTrack`` and must be built via ``build_externals.sh``.
+``externals/ByteTrack/bytetrack_vendor`` and is isolated from the official
+YOLOX package. Verify its presence via ``build_externals.sh`` before running the
+tracking step; the script now performs only a sanity check and no native
+YOLOX modules need to be built.
 Only detections with score above ``--min-score`` are considered.
 
 ```bash
@@ -225,6 +234,13 @@ python -m src.detect_objects track \
 * ``--detections-json`` – input file produced by the detection step.
 * ``--output-json`` – destination for the tracked results.
 * ``--min-score`` – detection score threshold (default: ``0.3``).
+
+The detection CLI relies on the official `yolox` package installed from the
+GitHub repository, while the tracking CLI imports only
+`bytetrack_vendor.*` from the vendored ByteTrack tree. There are no shared
+imports between the two; running detection and tracking in separate
+containers (`decoder-detect` and `decoder-track`) avoids dependency
+conflicts.
 
 The detections file may use either of the following schemas:
 
@@ -323,14 +339,17 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 ## Detection Docker Image
 
 - **Service name:** `decoder-detect`
-- **Purpose:** Run YOLOX detection and optional ByteTrack tracking on a directory of frames.
+- **Purpose:** Run YOLOX detection on a directory of frames using the official `yolox` package.
 - **GPU:** Required; enable with `--gpus all`.
 - **Volumes:** Mount project directory to `/app` to access frames and outputs.
 - **Build:**
 
   ```bash
-  docker build -f Dockerfile.detect -t decoder-detect:latest .
+  DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest \
+      --build-arg YOLOX_COMMIT=0d6e2ed2a9c7f1dca5d4e0754e40d0089f4d2a63 .
   ```
+
+  The `YOLOX_COMMIT` argument can be overridden to test other upstream revisions.
 
 - **Run:**
 
@@ -351,7 +370,33 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--nms-thres` | NMS threshold | `0.45` |
   | `--classes` | Filter by class IDs | none |
 
-Tracking mode is available via `python -m src.detect_objects track` inside the container.
+
+## Tracking Docker Image
+
+- **Service name:** `decoder-track`
+- **Purpose:** Run ByteTrack tracking on detection results using the vendored `bytetrack_vendor` package.
+- **GPU:** Required; enable with `--gpus all`.
+- **Volumes:** Mount project directory to `/app` to access inputs and outputs.
+- **Build:**
+
+  ```bash
+  DOCKER_BUILDKIT=1 docker build -f Dockerfile.track -t decoder-track:latest .
+  ```
+
+- **Run:**
+
+  ```bash
+  docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+      track --detections-json /app/detections.json --output-json /app/tracks.json
+  ```
+
+- **Parameters:**
+
+  | Option | Description | Default |
+  | ------ | ----------- | ------- |
+  | `--detections-json` | Input JSON from detection step | **required** |
+  | `--output-json` | Path to save tracked results | **required** |
+  | `--min-score` | Detection score threshold | `0.3` |
 
 ## Single Image Detection Demo
 
@@ -379,13 +424,9 @@ The command prints the detections as JSON and saves the annotated image to
 
 ## Troubleshooting
 
-- **ImportError when loading YOLOX** – Make sure the ByteTrack submodule is
-  cloned and built. Run:
-
-  ```bash
-  git submodule update --init --recursive
-  bash build_externals.sh
-  ```
+- **ImportError when loading YOLOX** – Ensure the official `yolox` package is
+  installed in the detection environment. For tracking errors verify that the
+  ByteTrack vendor is verified via `bash build_externals.sh`.
 
 - **Missing weights** – Download the official YOLOX checkpoints and place them
   in the ``weights`` directory, e.g. ``weights/yolox_x.pth``.

@@ -9,16 +9,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for ``yolox.exp.build`` helpers."""
+"""Tests for ``bytetrack_vendor.exp.build`` helpers."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "externals" / "ByteTrack"))
 
-from yolox.exp import get_exp_by_file
+from bytetrack_vendor.exp import get_exp_by_file
 import pytest
 
 
