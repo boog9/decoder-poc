@@ -30,12 +30,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 WORKDIR /app
 COPY . /app
+ENV PYTHONPATH=/app/externals/ByteTrack:$PYTHONPATH
 RUN bash build_externals.sh && \
     python - <<'PY'
 from bytetrack_vendor.tracker.byte_tracker import BYTETracker
 print('BYTETracker import OK', BYTETracker is not None)
 PY
-
-ENV PYTHONPATH=/app/externals/ByteTrack:$PYTHONPATH
 
 ENTRYPOINT ["python", "-m", "src.detect_objects"]

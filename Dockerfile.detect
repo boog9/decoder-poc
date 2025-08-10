@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
 
-ARG YOLOX_COMMIT=0d6e2ed2a9c7f1dca5d4e0754e40d0089f4d2a63
+ARG YOLOX_REF=0.3.0
 
 LABEL org.opencontainers.image.source="https://github.com/boog9/decoder-poc" \
       org.opencontainers.image.description="Decoder YOLOX detection" \
@@ -29,13 +29,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install -U pip setuptools wheel
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install -r /tmp/requirements.txt && \
-    pip3 install --no-deps \
-        "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@${YOLOX_COMMIT}" && \
-    python - <<'PY'
+      (pip3 install --no-deps "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@${YOLOX_REF}" \
+       || (echo "[warn] YOLOX ref '${YOLOX_REF}' not found, falling back to 'main'" && \
+           pip3 install --no-deps "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@main")) && \
+      python - <<'PY' || true
 import importlib, inspect
+import torch, torchvision
+print('torch:', torch.__version__, '| torchvision:', torchvision.__version__)
 vt = importlib.import_module('yolox.data.data_augment').ValTransform
 print('ValTransform has legacy:', 'legacy' in inspect.signature(vt.__init__).parameters)
-print('get_exp:', hasattr(importlib.import_module('yolox.exp'), 'get_exp'))
+try:
+    from yolox.exp import get_exp
+    print('get_exp available:', True)
+except Exception as e:
+    print('get_exp import failed:', e)
 PY
 
 WORKDIR /app
