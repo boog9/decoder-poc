@@ -50,6 +50,10 @@ bash build_externals.sh  # sanity-check ByteTrack vendor only
 make test
 ```
 
+> **Note:** PyTorch is provided by the base image `pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime`.
+> Do not install or upgrade `torch` or `torchvision` via pip—this increases the image size
+> and may break CUDA compatibility.
+
 ### External Dependencies
 
 Verify the vendored ByteTrack tracker:
@@ -172,12 +176,13 @@ To use the GPU-enabled Docker image, build it with ``Dockerfile.detect``:
 
 ```bash
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest \
-    --build-arg YOLOX_COMMIT=0d6e2ed2a9c7f1dca5d4e0754e40d0089f4d2a63 \
+    --build-arg YOLOX_REF=0.3.0 \
     --progress=plain .
 ```
 
-The `YOLOX_COMMIT` build argument allows pinning a specific revision of the
-official `yolox` repository.
+The `YOLOX_REF` build argument accepts a tag, branch or commit. If the
+specified ref is unavailable, the build falls back to ``main`` and prints a
+warning.
 
 Run detection inside the container (assumes frames are in ``./frames``):
 
@@ -346,10 +351,13 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 
   ```bash
   DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest \
-      --build-arg YOLOX_COMMIT=0d6e2ed2a9c7f1dca5d4e0754e40d0089f4d2a63 .
+      --build-arg YOLOX_REF=0.3.0 .
   ```
 
-  The `YOLOX_COMMIT` argument can be overridden to test other upstream revisions.
+  The `YOLOX_REF` argument accepts a tag, branch or commit. If the ref is
+  invalid, the build falls back to ``main`` and prints a non-fatal warning. A
+  YOLOX smoke-check runs during the build; failures only issue a warning and do
+  not stop the build.
 
 - **Run:**
 
@@ -382,6 +390,9 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   ```bash
   DOCKER_BUILDKIT=1 docker build -f Dockerfile.track -t decoder-track:latest .
   ```
+
+  The image sets ``PYTHONPATH`` before verifying the ByteTrack vendor to avoid
+  ``ModuleNotFoundError`` during the build-time sanity check.
 
 - **Run:**
 

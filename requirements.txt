@@ -13,6 +13,4 @@ scipy>=1.11        # needed by tracker.byte_tracker fallback
 # C-extension, needed for yolox.tracker.byte_tracker
 shapely>=2.0
 tabulate>=0.9
-torch>=2.2.0
-torchvision>=0.17.2
 transformers>=4.53.0
