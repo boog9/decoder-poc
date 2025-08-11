@@ -1,0 +1,15 @@
+FROM python:3.10-slim
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 libgl1 ffmpeg tini && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY src/ /app/src
+
+# Minimal dependencies for headless rendering
+RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir opencv-python-headless pillow numpy
+
+ENTRYPOINT ["tini", "--", "python", "-m", "src.draw_overlay"]
