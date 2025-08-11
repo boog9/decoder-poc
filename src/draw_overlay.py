@@ -23,12 +23,18 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+try:  # pragma: no cover - optional dependency
+    import yaml
+except Exception:  # pragma: no cover - yaml is optional
+    yaml = None  # type: ignore
+
 import cv2
 import numpy as np
 from PIL import Image
 
 LOGGER = logging.getLogger("draw_overlay")
-COCO: Dict[int, str] = {0: "person", 32: "sports ball"}
+CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball"}
+PALETTE_SEED = 0
 
 
 # ---------------------------------------------------------------------------
@@ -42,21 +48,61 @@ def _class_label(value: int | str) -> str:
         cid = int(value)
     except (TypeError, ValueError):
         return str(value)
-    return COCO.get(cid, str(cid))
+    return CLASS_MAP.get(cid, str(cid))
+
+
+def _hash_color(key: str) -> Tuple[int, int, int]:
+    """Return a deterministic BGR color for ``key``."""
+
+    digest = hashlib.md5(f"{PALETTE_SEED}:{key}".encode()).digest()
+    return int(digest[0]), int(digest[1]), int(digest[2])
 
 
 def _class_color(value: int | str) -> Tuple[int, int, int]:
     """Generate a stable BGR color for a class label."""
 
-    digest = hashlib.md5(str(value).encode()).digest()
-    return int(digest[0]), int(digest[1]), int(digest[2])
+    return _hash_color(str(value))
 
 
 def _track_color(track_id: Optional[int]) -> Tuple[int, int, int]:
     """Generate a stable color for a track identifier."""
 
-    digest = hashlib.md5(str(track_id).encode()).digest()
-    return int(digest[0]), int(digest[1]), int(digest[2])
+    return _hash_color(str(track_id))
+
+
+def _load_class_map(path: Path) -> Dict[int, str]:
+    """Load a mapping of class IDs to names from JSON or YAML."""
+
+    with path.open() as fh:
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            if yaml is None:  # pragma: no cover - optional
+                raise RuntimeError("PyYAML is required to load YAML class maps")
+            data = yaml.safe_load(fh)
+        else:
+            data = json.load(fh)
+    mapping: Dict[int, str] = {}
+    for k, v in (data or {}).items():
+        try:
+            mapping[int(k)] = str(v)
+        except (TypeError, ValueError):
+            continue
+    return mapping
+
+
+def _validate_track_ids(frame_map: Dict[str, List[dict]]) -> None:
+    """Ensure at least one ``track_id`` repeats across frames."""
+
+    ids = [
+        det.get("track_id")
+        for dets in frame_map.values()
+        for det in dets
+        if det.get("track_id") is not None
+    ]
+    if ids and len(ids) == len(set(ids)):
+        raise ValueError(
+            "Looks like track IDs are not persistent across frames. "
+            "Colors will flicker. Please fix track export."
+        )
 
 
 def _load_records(json_path: Path, keys: Tuple[str, ...]) -> Dict[str, List[dict]]:
@@ -193,7 +239,7 @@ def _draw_overlay(
     output_dir: Path,
     label: bool,
     show_id: bool,
-    score_min: float,
+    confidence_thr: float,
     allowed_names: set[str],
     allowed_ids: set[int],
     thickness: int,
@@ -236,7 +282,7 @@ def _draw_overlay(
         h, w = img.shape[:2]
         for det in dets:
             score = float(det.get("score", 0.0))
-            if score < score_min:
+            if score < confidence_thr:
                 continue
             cls_val = det.get("class", "")
             cname = _class_label(cls_val)
@@ -267,17 +313,16 @@ def _draw_overlay(
                 color = _class_color(cls_val)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
             text_bits: List[str] = []
-            if label:
-                txt = cname
-                if det.get("score") is not None:
-                    txt += f" {score:.2f}"
-                text_bits.append(txt)
             if show_id and mode == "track":
                 tid = det.get("track_id")
                 if tid is not None:
                     text_bits.append(f"#{tid}")
+            if label:
+                text_bits.append(cname)
+                if det.get("score") is not None:
+                    text_bits.append(f"{score:.2f}")
             if text_bits:
-                text = " ".join(text_bits)
+                text = "  ".join(text_bits)
                 cv2.putText(
                     img,
                     text,
@@ -365,20 +410,22 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tracks-json", type=Path, help="Tracks JSON file")
     parser.add_argument(
         "--mode",
-        choices=["auto", "detect", "track"],
+        choices=["auto", "class", "track"],
         default="auto",
         help="Overlay mode (default: auto)",
     )
     parser.add_argument("--label", action="store_true", help="Draw class labels and scores")
     parser.add_argument("--id", action="store_true", help="Draw track IDs")
     parser.add_argument(
-        "--score-min", type=float, default=0.0, help="Minimum score threshold"
+        "--confidence-thr", type=float, default=0.0, help="Minimum score threshold"
     )
     parser.add_argument(
         "--only-class",
         type=str,
         help="Comma separated list of class names or IDs to keep",
     )
+    parser.add_argument("--palette-seed", type=int, default=0, help="Seed for color palette")
+    parser.add_argument("--class-map", type=Path, help="JSON or YAML class name map")
     parser.add_argument("--thickness", type=int, default=2, help="Bounding box thickness")
     parser.add_argument("--font-scale", type=float, default=0.5, help="Text font scale")
     parser.add_argument("--max-frames", type=int, default=0, help="Limit number of frames")
@@ -400,24 +447,38 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.tracks_json and args.tracks_json.exists():
             mode = "track"
         elif args.detections_json and args.detections_json.exists():
-            mode = "detect"
+            mode = "class"
         else:
             LOGGER.error("No detections or tracks JSON provided")
             return 1
     else:
         mode = args.mode
 
-    if mode == "detect" and not args.detections_json:
-        LOGGER.error("--detections-json required for detect mode")
+    if mode == "class" and not args.detections_json:
+        LOGGER.error("--detections-json required for class mode")
         return 1
     if mode == "track" and not args.tracks_json:
         LOGGER.error("--tracks-json required for track mode")
         return 1
 
-    if mode == "detect":
+    global PALETTE_SEED, CLASS_MAP
+    PALETTE_SEED = args.palette_seed
+    if args.class_map:
+        try:
+            CLASS_MAP.update(_load_class_map(args.class_map))
+        except Exception as exc:  # pragma: no cover - file errors
+            LOGGER.error("Failed to load class map: %s", exc)
+            return 1
+
+    if mode == "class":
         frame_map = _load_detections(args.detections_json)
     else:
         frame_map = _load_tracks(args.tracks_json)
+        try:
+            _validate_track_ids(frame_map)
+        except ValueError as exc:
+            LOGGER.error(str(exc))
+            return 1
 
     allowed_names, allowed_ids = _parse_class_filter(args.only_class)
     written = _draw_overlay(
@@ -426,7 +487,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.output_dir,
         args.label,
         args.id,
-        args.score_min,
+        args.confidence_thr,
         allowed_names,
         allowed_ids,
         args.thickness,
@@ -437,13 +498,17 @@ def main(argv: Iterable[str] | None = None) -> int:
         mode,
     )
 
+    if written == 0:
+        LOGGER.warning(
+            "No overlays were drawn. Adjust filters or verify input files."
+        )
     if written and args.export_mp4:
         try:
             _export_mp4(args.output_dir, args.export_mp4, args.fps, args.crf)
         except subprocess.CalledProcessError as exc:  # pragma: no cover - ffmpeg failure
             LOGGER.error("ffmpeg failed: %s", exc)
             return 1
-    return 0
+    return 0 if written else 1
 
 
 if __name__ == "__main__":  # pragma: no cover
