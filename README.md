@@ -117,6 +117,32 @@ environment variable:
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
+## Overlay Rendering CLI
+
+Draw detection or tracking overlays on extracted frames. Colors are stable
+either per class or per track ID depending on the selected mode.
+
+```bash
+python -m src.draw_overlay \
+    --frames-dir frames_min \
+    --tracks-json tracks.json \
+    --output-dir frames_tracks \
+    --mode track --label --id
+
+python -m src.draw_overlay \
+    --frames-dir frames_min \
+    --detections-json detections.json \
+    --output-dir frames_det \
+    --mode class --label
+```
+
+- `--palette-seed`: Stabilise the colour palette globally.
+- `--class-map`: Optional JSON/YAML mapping of class IDs to names.
+- `--confidence-thr`: Filter detections below this score.
+
+The legacy `src.draw_tracks` module is kept for backwards compatibility and
+forwards all arguments to `src.draw_overlay --mode track`.
+
 
 Before running the enhancement script, install the Python dependencies. Ensure
 that ``python`` and ``pip`` come from the same environment:
