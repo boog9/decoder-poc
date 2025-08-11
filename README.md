@@ -449,3 +449,54 @@ The command prints the detections as JSON and saves the annotated image to
 
 - **Missing weights** – Download the official YOLOX checkpoints and place them
   in the ``weights`` directory, e.g. ``weights/yolox_x.pth``.
+
+## 4. Visualization (decoder-draw)
+
+Render bounding boxes for detection or tracking results.
+
+```bash
+# 1) Build the image
+make draw
+
+# 2a) Visualise detections
+make draw-run-detect
+
+# 2b) Visualise tracks with IDs
+make draw-run-track
+
+# 2c) Assemble frames into MP4
+make draw-run-mp4
+
+# Show CLI help
+docker run --rm decoder-draw:latest --help
+```
+
+The CLI reads frame images and one of `detections.json` or `tracks.json`.
+Two JSON schemas are accepted:
+
+* Nested per-frame: `[{"frame": "frame_000123.png", "detections": [{"bbox": [x1,y1,x2,y2], "class": <int|str>, "score": float}]}]`
+* Flat list: `[{"frame": "frame_000123.png", "bbox": [...], "class": ..., "score": ..., "track_id": int?}]`
+
+Supported keys: `frame`, `bbox`, `class`, `score`, `track_id`.
+Default class mapping: `0: person`, `32: sports ball`.
+Filter classes via `--only-class`, e.g. `--only-class person,sports ball`.
+
+Notes on reliability:
+
+* Falls back to Pillow if `cv2.imread` fails.
+* Bounding boxes are clipped to frame boundaries.
+* Output frames are sorted lexicographically before MP4 export.
+* MP4 export uses ffmpeg **image2** demuxer with a staged numeric sequence for deterministic order.
+* Frame names like `frame_%06d.png` are expected when resolving by index.
+
+Pipeline usage:
+
+```
+detect -> detections.json
+track  -> tracks.json
+draw   -> overlays in out/frames_viz and optional MP4
+```
+
+Image name: `decoder-draw:latest` (CPU only). Mount the repository as `/app`.
+Parameters: run `docker run --rm decoder-draw:latest --help`.
+Modes: `--mode auto|detect|track` (default `auto` picks `track` if `--tracks-json` exists, otherwise `detect`).
