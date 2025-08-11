@@ -370,9 +370,9 @@ This prints the number of invalid bounding boxes and low-confidence detections.
       detect --frames-dir /app/frames --output-json /app/detections.json
   ```
 
-> **Note:** The image has `ENTRYPOINT ["python","-m","src.detect_objects"]`.
-> For ad-hoc Python commands (e.g. printing versions) use:
-> `docker run --rm --entrypoint python decoder-detect:latest -c "import torch; print(torch.__version__)"`.
+> **Note:** The image sets `ENTRYPOINT ["python","-m","src.detect_objects"]`.
+> For one-off Python commands use:
+> `docker run --rm --entrypoint python decoder-detect:latest -c "import yolox; print(yolox.__file__)"`.
 
 - **Parameters:**
 
