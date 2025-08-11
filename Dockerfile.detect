@@ -32,10 +32,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       (pip3 install --no-deps "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@${YOLOX_REF}" \
        || (echo "[warn] YOLOX ref '${YOLOX_REF}' not found, falling back to 'main'" && \
            pip3 install --no-deps "yolox @ git+https://github.com/Megvii-BaseDetection/YOLOX.git@main")) && \
-        bash -lc "python - <<'PY' || { echo '[warn] YOLOX smoke-check failed (non-fatal)'; exit 0; }
+    <<'BASH'
+set -e
+python - <<'PY' || { echo '[warn] YOLOX smoke-check failed (non-fatal)'; exit 0; }
 import importlib, inspect
-import torch, torchvision
-print('torch:', torch.__version__, '| torchvision:', torchvision.__version__)
+try:
+    import torch, torchvision
+    print('torch:', torch.__version__, '| torchvision:', torchvision.__version__)
+except Exception as e:
+    print('torch/vision check failed:', e)
 vt = importlib.import_module('yolox.data.data_augment').ValTransform
 print('ValTransform has legacy:', 'legacy' in inspect.signature(vt.__init__).parameters)
 try:
@@ -43,7 +48,8 @@ try:
     print('get_exp available:', True)
 except Exception as e:
     print('get_exp import failed:', e)
-PY"
+PY
+BASH
 
 WORKDIR /app
 COPY . /app
