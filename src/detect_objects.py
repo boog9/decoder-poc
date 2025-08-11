@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import importlib
 import json
 import os
 import time
@@ -51,13 +52,28 @@ from tqdm import tqdm
 
 import torch
 
-try:
-    from yolox.data.data_augment import ValTransform as _VT
 
-    _VT_HAS_LEGACY = "legacy" in inspect.signature(_VT.__init__).parameters
-except Exception:  # pragma: no cover - optional dependency
-    _VT = None  # type: ignore
-    _VT_HAS_LEGACY = False
+def _resolve_val_transform():
+    """Import YOLOX's :class:`ValTransform` lazily.
+
+    Returns
+    -------
+    tuple[type, bool]
+        The ``ValTransform`` class and whether it accepts the ``legacy``
+        keyword argument.
+
+    Raises
+    ------
+    ImportError
+        If the ``yolox`` package is unavailable.
+    """
+
+    try:
+        VT = importlib.import_module("yolox.data.data_augment").ValTransform
+        has_legacy = "legacy" in inspect.signature(VT.__init__).parameters
+        return VT, has_legacy
+    except Exception as e:  # pragma: no cover - detection requires YOLOX
+        raise ImportError("yolox is required for detection") from e
 
 try:
     from yolox.data.datasets import COCO_CLASSES
@@ -327,12 +343,11 @@ def _preprocess_image(
     if img is None:
         raise FileNotFoundError(f"Cannot read {path}")
 
-    if _VT is None:  # pragma: no cover - detection requires YOLOX
-        raise ImportError("yolox is required for detection")
+    VT, has_legacy = _resolve_val_transform()
 
     h0, w0 = img.shape[:2]
 
-    preproc = _VT(legacy=False) if _VT_HAS_LEGACY else _VT()
+    preproc = VT(legacy=False) if has_legacy else VT()
     img_processed, _ = preproc(img, None, (size, size))
 
     _, new_h, new_w = img_processed.shape
