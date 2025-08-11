@@ -23,7 +23,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 import re
 
 try:
@@ -115,6 +115,52 @@ def _normalize_bbox(b) -> list[float] | None:
         return [float(v) for v in b]
     except (TypeError, ValueError):
         return None
+
+
+def _get_tlwh_from_track(track: Any) -> Tuple[float, float, float, float]:
+    """Return (x, y, w, h) from a ByteTrack-compatible track.
+
+    Supports multiple STrack implementations that may expose ``tlwh`` or
+    ``tlbr`` as attributes or callables and falls back to the legacy
+    ``_tlwh`` private attribute.
+
+    Parameters
+    ----------
+    track:
+        Track instance returned by ByteTrack.
+
+    Returns
+    -------
+    tuple[float, float, float, float]
+        Bounding box in ``(x, y, w, h)`` format.
+
+    Raises
+    ------
+    AttributeError
+        If none of the supported attributes are available.
+    """
+
+    if hasattr(track, "tlwh"):
+        v = track.tlwh
+        v = v() if callable(v) else v
+        if v is not None:
+            x, y, w, h = [float(xx) for xx in v]
+            return x, y, w, h
+
+    if hasattr(track, "tlbr"):
+        v = track.tlbr
+        v = v() if callable(v) else v
+        if v is not None:
+            l, t, r, b = [float(xx) for xx in v]
+            w = max(0.0, r - l)
+            h = max(0.0, b - t)
+            return l, t, w, h
+
+    if hasattr(track, "_tlwh"):
+        x, y, w, h = [float(xx) for xx in track._tlwh]
+        return x, y, w, h
+
+    raise AttributeError("STrack lacks tlwh/tlbr/_tlwh")
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -659,6 +705,7 @@ def track_detections(
     )
     output: list[dict] = []
     track_ids = set()
+    saved = 0
     for frame_id in sorted(frames):
         dets = frames[frame_id]
         logger.debug("Frame {}: {} detections", frame_id, len(dets))
@@ -679,8 +726,19 @@ def track_detections(
         used_dets: set[int] = set()
 
         for obj in online:
-            # Access ByteTrack's internal bounding box representation directly for efficiency
-            x, y, w, h = obj._tlwh  # pylint: disable=protected-access
+            x, y, w, h = _get_tlwh_from_track(obj)
+
+            if not (w >= 0 and h >= 0):
+                logger.warning(
+                    "Invalid bbox from track_id=%s: (x=%.2f,y=%.2f,w=%.2f,h=%.2f)",
+                    getattr(obj, "track_id", getattr(obj, "tid", None)),
+                    x,
+                    y,
+                    w,
+                    h,
+                )
+                continue
+
             tlbr = [x, y, x + w, y + h]
             best_iou = 0.0
             best_idx: int | None = None
@@ -691,43 +749,45 @@ def track_detections(
                 if iou > best_iou:
                     best_iou = iou
                     best_idx = idx
+            track_id = int(getattr(obj, "track_id", getattr(obj, "tid", -1)))
             if best_idx is not None and best_iou > 0.3:
-                _det_index[(frame_id, best_idx)]["track_id"] = obj.track_id
+                _det_index[(frame_id, best_idx)]["track_id"] = track_id
                 used_dets.add(best_idx)
                 logger.debug(
-                    "Assigned track_id {} to det #{} (IoU={:.2f})",
-                    obj.track_id,
+                    "Assigned track_id %s to det #%s (IoU=%.2f)",
+                    track_id,
                     best_idx,
                     best_iou,
                 )
             else:
                 logger.warning(
-                    "No matching detection found for track {} at frame {}",
-                    obj.track_id,
+                    "No matching detection found for track %s at frame %s",
+                    track_id,
                     frame_id,
                 )
 
         for obj in online:
-            x, y, w, h = obj.tlwh
+            x, y, w, h = _get_tlwh_from_track(obj)
 
+            track_id = int(getattr(obj, "track_id", getattr(obj, "tid", -1)))
             cls_idx = getattr(obj, "cls", getattr(obj, "class_id", None))
             if cls_idx is None:
-                det = _first_det_for_track(obj.track_id, frame_id)
+                det = _first_det_for_track(track_id, frame_id)
                 cls_idx = det.get("class")
 
-            cls_name = CLASS_ID_TO_NAME.get(int(cls_idx), "unknown")
-
             bbox = [int(x), int(y), int(x + w), int(y + h)]
+            score = float(getattr(obj, "score", getattr(obj, "tracklet_score", 0.0)))
             output.append(
                 {
                     "frame": frame_id,
                     "class": int(cls_idx),
-                    "track_id": obj.track_id,
+                    "track_id": track_id,
                     "bbox": bbox,
-                    "score": float(obj.score),
+                    "score": score,
                 }
             )
-            track_ids.add(obj.track_id)
+            track_ids.add(track_id)
+            saved += 1
 
     output_json.parent.mkdir(parents=True, exist_ok=True)
     with output_json.open("w") as fh:
@@ -740,7 +800,7 @@ def track_detections(
         for cid in (CLASS_NAME_TO_ID["person"], CLASS_NAME_TO_ID["ball"])
     }
     logger.info("Track summary: {}", summary)
-    logger.info("Saved {} tracked detections to {}", len(output), output_json)
+    logger.info("Saved %d tracked detections to %s", saved, output_json)
 
 
 def main(argv: Iterable[str] | None = None) -> None:

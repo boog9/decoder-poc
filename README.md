@@ -270,6 +270,11 @@ python -m src.detect_objects track \
 * ``--output-json`` – destination for the tracked results.
 * ``--min-score`` – detection score threshold (default: ``0.3``).
 
+Note: We avoid accessing private STrack fields and support different ByteTrack
+forks that expose `tlwh` as a property or method, and sometimes only provide
+`tlbr`. This prevents crashes such as ``AttributeError: 'STrack' object has no
+attribute '_tlwh'``.
+
 The detection CLI relies on the official `yolox` package installed from the
 GitHub repository, while the tracking CLI imports only
 `bytetrack_vendor.*` from the vendored ByteTrack tree. There are no shared
