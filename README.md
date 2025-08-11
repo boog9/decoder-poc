@@ -2,6 +2,20 @@
 
 This project contains experimental utilities for video processing. The `frame_extractor` CLI provides a simple way to extract video frames using FFmpeg.
 
+## Quick pipeline (recommended)
+
+To avoid "image not found" errors, use the Makefile targets that auto-build images:
+
+```bash
+# build both images if missing, then run detect -> track
+make pipeline
+```
+
+You can override YOLOX ref at build time:
+```bash
+make detect-image YOLOX_REF=0.3.0
+```
+
 ## Frame Extraction CLI
 
 ```
@@ -197,9 +211,9 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
     --classes 0 32
 ```
 
-> **Note:** the image already has ENTRYPOINT `python -m src.detect_objects`.
-> Do not prefix the command with `python`; the first argument must be the
-> subcommand `detect` or `track`.
+> **Note:** The images use `ENTRYPOINT ["python","-m","src.detect_objects"]`.
+> For ad-hoc python commands inside the container, override entrypoint:
+> `docker run --rm --entrypoint python decoder-detect:latest -c "import torch; print(torch.__version__)"`.
 
 Example ``detections.json`` output:
 
@@ -370,9 +384,9 @@ This prints the number of invalid bounding boxes and low-confidence detections.
       detect --frames-dir /app/frames --output-json /app/detections.json
   ```
 
-> **Note:** The image sets `ENTRYPOINT ["python","-m","src.detect_objects"]`.
-> For one-off Python commands use:
-> `docker run --rm --entrypoint python decoder-detect:latest -c "import yolox; print(yolox.__file__)"`.
+> **Note:** The images use `ENTRYPOINT ["python","-m","src.detect_objects"]`.
+> For ad-hoc python commands inside the container, override entrypoint:
+> `docker run --rm --entrypoint python decoder-detect:latest -c "import torch; print(torch.__version__)"`.
 
 - **Parameters:**
 
