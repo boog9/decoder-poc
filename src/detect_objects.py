@@ -229,7 +229,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     det.add_argument("--frames-dir", type=Path, required=True)
     det.add_argument("--output-json", type=Path, required=True)
     det.add_argument(
-        "--model", type=str, default="yolox-s", choices=sorted(YOLOX_MODELS)
+        "--model", type=str, default="yolox-x", choices=sorted(YOLOX_MODELS)
     )
     det.add_argument("--img-size", type=int, default=640)
     det.add_argument("--conf-thres", type=float, default=0.3)

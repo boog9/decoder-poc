@@ -119,7 +119,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        default="yolox-s",
+        default="yolox-x",
         choices=sorted(dobj.YOLOX_MODELS),
         help="YOLOX model variant",
     )

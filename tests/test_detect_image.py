@@ -66,7 +66,7 @@ import src.detect_image as di
 def test_parse_args_defaults() -> None:
     args = di.parse_args(["--image", "img.jpg"])
     assert isinstance(args, argparse.Namespace)
-    assert args.model == "yolox-s"
+    assert args.model == "yolox-x"
     assert args.img_size == 640
 
 

@@ -80,7 +80,7 @@ def test_parse_args_defaults() -> None:
         ]
     )
     assert isinstance(args, argparse.Namespace)
-    assert args.model == "yolox-s"
+    assert args.model == "yolox-x"
     assert args.img_size == 640
     assert args.classes is None
     assert args.two_pass is True
