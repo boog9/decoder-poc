@@ -26,6 +26,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 import re
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from shapely.geometry import Polygon
+
 try:
     from shapely.geometry import box
 except Exception:  # pragma: no cover - optional dependency
@@ -61,6 +66,7 @@ def _postprocess(*args, **kwargs):
 def _norm(s: str) -> str:
     return " ".join(str(s).strip().lower().split())
 
+
 # Convenience aliases for common class names
 CLASS_ALIASES = {
     "ball": "sports ball",
@@ -95,6 +101,7 @@ def _class_id_from_name(name: str) -> int:
         raise KeyError(f"Unknown class name: {name}")
     return CLASS_NAME_TO_ID[key]
 
+
 # BYTETracker is imported lazily to avoid adding the vendored tracker to the
 # Python path when running detection-only workloads.
 BYTETracker = None
@@ -105,10 +112,11 @@ def _is_track_container() -> bool:
 
     return "externals/ByteTrack" in os.environ.get("PYTHONPATH", "")
 
-from PIL import Image
-from tqdm import tqdm
 
-import torch
+from PIL import Image  # noqa: E402
+from tqdm import tqdm  # noqa: E402
+
+import torch  # noqa: E402
 
 
 def _resolve_val_transform():
@@ -132,6 +140,7 @@ def _resolve_val_transform():
         return VT, has_legacy
     except Exception as e:  # pragma: no cover - detection requires YOLOX
         raise ImportError("yolox is required for detection") from e
+
 
 try:
     from yolox.data.datasets import COCO_CLASSES
@@ -166,10 +175,53 @@ def _extract_frame_id(val) -> int | None:
 def _normalize_bbox(b) -> list[float] | None:
     if not isinstance(b, (list, tuple)) or len(b) != 4:
         return None
-    try:
-        return [float(v) for v in b]
-    except (TypeError, ValueError):
-        return None
+    return [float(x) for x in b]
+
+
+def _load_roi(path: Path) -> Polygon:
+    """Load court ROI polygon from ``path``."""
+    from shapely.geometry import Polygon  # type: ignore
+
+    with path.open() as fh:
+        data = json.load(fh)
+    pts = data.get("polygon") or data.get("roi")
+    if not pts:
+        raise ValueError("ROI JSON must contain 'polygon' or 'roi' key")
+    return Polygon(pts)
+
+
+def _filter_by_roi(
+    detections: List[dict],
+    polygon: Polygon,
+    margin: float,
+    keep_outside: bool,
+) -> List[dict]:
+    """Filter detections based on ``polygon`` ROI.
+
+    The ``detections`` list is expected to be in nested format: each item has a
+    ``frame`` key and a ``detections`` list. Only detections whose bbox center
+    lies within ``polygon`` expanded by ``margin`` are kept unless
+    ``keep_outside`` is ``True``.
+    """
+
+    from shapely.geometry import Point  # type: ignore
+
+    expanded = polygon.buffer(margin)
+    out: List[dict] = []
+    for entry in detections:
+        kept: List[dict] = []
+        for det in entry.get("detections", []):
+            bbox = det.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            x0, y0, x1, y1 = bbox
+            cx = (x0 + x1) / 2.0
+            cy = (y0 + y1) / 2.0
+            inside = expanded.contains(Point(cx, cy))
+            if inside or keep_outside:
+                kept.append(det)
+        out.append({"frame": entry.get("frame"), "detections": kept})
+    return out
 
 
 def _get_tlwh_from_track(track: Any) -> Tuple[float, float, float, float]:
@@ -206,10 +258,10 @@ def _get_tlwh_from_track(track: Any) -> Tuple[float, float, float, float]:
         v = track.tlbr
         v = v() if callable(v) else v
         if v is not None:
-            l, t, r, b = [float(xx) for xx in v]
-            w = max(0.0, r - l)
-            h = max(0.0, b - t)
-            return l, t, w, h
+            left, top, right, bottom = [float(xx) for xx in v]
+            w = max(0.0, right - left)
+            h = max(0.0, bottom - top)
+            return left, top, w, h
 
     if hasattr(track, "_tlwh"):
         x, y, w, h = [float(xx) for xx in track._tlwh]
@@ -236,14 +288,34 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     det.add_argument("--nms-thres", type=float, default=0.45)
     det.add_argument("--classes", nargs="+", type=int, default=None)
     det.add_argument("--two-pass", action=argparse.BooleanOptionalAction, default=True)
-    det.add_argument("--person-conf", type=float, default=0.55)
+    det.add_argument("--person-conf", "--conf-person", type=float, default=0.55)
+    det.add_argument("--ball-conf", "--conf-ball", type=float, default=0.15)
     det.add_argument("--person-nms", type=float, default=0.45)
     det.add_argument("--person-img-size", type=int, default=1280)
     det.add_argument("--person-classes", nargs="+", default=["person"])
-    det.add_argument("--ball-conf", type=float, default=0.15)
     det.add_argument("--ball-nms", type=float, default=0.30)
     det.add_argument("--ball-img-size", type=int, default=1536)
     det.add_argument("--ball-classes", nargs="+", default=["sports ball"])
+    det.add_argument(
+        "--nms-class-aware",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply NMS per class (default)",
+    )
+    det.add_argument("--roi-json", type=Path, default=None)
+    det.add_argument("--roi-margin", type=float, default=8.0)
+    det.add_argument(
+        "--keep-outside-roi",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep detections outside ROI instead of dropping them",
+    )
+    det.add_argument(
+        "--prelink-ball",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Interpolate short gaps in ball detections",
+    )
     det.add_argument("--save-splits", action="store_true")
 
     # Tracking subcommand
@@ -251,6 +323,20 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument("--detections-json", type=Path, required=True)
     tr.add_argument("--output-json", type=Path, required=True)
     tr.add_argument("--min-score", type=float, default=0.3)
+    tr.add_argument("--fps", type=int, default=30)
+    tr.add_argument("--reid-reuse-window", type=int, default=30)
+    # Person tracker params
+    tr.add_argument("--p-track-thresh", type=float, default=0.50)
+    tr.add_argument("--p-high-thresh", type=float, default=0.60)
+    tr.add_argument("--p-match-thresh", type=float, default=0.80)
+    tr.add_argument("--p-track-buffer", type=int, default=60)
+    # Ball tracker params
+    tr.add_argument("--b-track-thresh", type=float, default=0.15)
+    tr.add_argument("--b-high-thresh", type=float, default=0.30)
+    tr.add_argument("--b-match-thresh", type=float, default=0.85)
+    tr.add_argument("--b-track-buffer", type=int, default=90)
+    tr.add_argument("--b-min-box-area", type=float, default=4.0)
+    tr.add_argument("--b-max-aspect-ratio", type=float, default=2.0)
 
     # Parse provided arguments or ``sys.argv`` when ``argv`` is ``None``.
     args = parser.parse_args(argv)
@@ -283,9 +369,7 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         return CLASS_NAME_TO_ID.get(key, -1)
 
     if params == ["dets", "frame_id"]:
-        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
-            :, None
-        ]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [
                 np.asarray(tlwhs, dtype=np.float32),
@@ -297,9 +381,7 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
         return tracker.update(dets, frame_id)
 
     if params == ["output_results", "img_info", "img_size"]:
-        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
-            :, None
-        ]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [
                 np.asarray(tlwhs, dtype=np.float32),
@@ -319,9 +401,7 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
 
     # --- version with MOT style arguments --------------------------------
     if {"img_info", "img_size"} & set(params):
-        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
-            :, None
-        ]
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
         dets = np.concatenate(
             [
                 np.asarray(tlwhs, dtype=np.float32),
@@ -507,6 +587,7 @@ def run_infer(
     conf: float,
     nms: float,
     allowed_classes: set[str | int] | None = None,
+    class_agnostic: bool = False,
 ) -> List[dict]:
     """Run YOLOX inference on ``frames`` using ``model``.
 
@@ -552,7 +633,7 @@ def run_infer(
                 num_classes=YOLOX_NUM_CLASSES,
                 conf_thre=conf,
                 nms_thre=nms,
-                class_agnostic=False,
+                class_agnostic=class_agnostic,
             )
 
             det = processed[0] if processed and processed[0] is not None else None
@@ -637,6 +718,11 @@ def detect_two_pass(
     ball_img_size: int,
     ball_classes: Sequence[str],
     save_splits: bool = False,
+    nms_class_aware: bool = True,
+    roi_json: Path | None = None,
+    roi_margin: float = 8.0,
+    keep_outside_roi: bool = False,
+    prelink_ball: bool = True,
 ) -> None:
     """Run two-pass detection for person and ball classes."""
     if not torch.cuda.is_available():  # pragma: no cover
@@ -652,12 +738,34 @@ def detect_two_pass(
         logger.warning("No frames found in {}", frames_dir)
         return
     det_person = run_infer(
-        model, frames, person_img_size, person_conf, person_nms, set(person_classes)
+        model,
+        frames,
+        person_img_size,
+        person_conf,
+        person_nms,
+        set(person_classes),
+        class_agnostic=not nms_class_aware,
     )
     det_ball = run_infer(
-        model, frames, ball_img_size, ball_conf, ball_nms, set(ball_classes)
+        model,
+        frames,
+        ball_img_size,
+        ball_conf,
+        ball_nms,
+        set(ball_classes),
+        class_agnostic=not nms_class_aware,
     )
     merged = merge_detections(det_person, det_ball)
+    if roi_json:
+        poly = _load_roi(roi_json)
+        merged = _filter_by_roi(merged, poly, roi_margin, keep_outside_roi)
+    if prelink_ball:
+        from .ball_temporal_link import link_ball_detections
+
+        link_ball_detections(merged)
+    merged.sort(key=lambda e: _extract_frame_id(e.get("frame")))
+    for e in merged:
+        e["detections"].sort(key=lambda d: d.get("class", 0))
     if save_splits:
         save_json(det_person, out_json.with_name(out_json.stem + "_person.json"))
         save_json(det_ball, out_json.with_name(out_json.stem + "_ball.json"))
@@ -672,6 +780,11 @@ def detect_folder(
     conf_thres: float = 0.3,
     nms_thres: float = 0.45,
     class_ids: Sequence[int] | None = None,
+    nms_class_aware: bool = True,
+    roi_json: Path | None = None,
+    roi_margin: float = 8.0,
+    keep_outside_roi: bool = False,
+    prelink_ball: bool = True,
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
@@ -707,9 +820,7 @@ def detect_folder(
     start = time.perf_counter()
     with tqdm(total=len(frames), desc="Detecting") as pbar:
         for frame in frames:
-            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(
-                frame, img_size
-            )
+            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(frame, img_size)
             with torch.no_grad():
                 raw = model(tensor)[0]
 
@@ -726,14 +837,10 @@ def detect_folder(
                 num_classes=YOLOX_NUM_CLASSES,
                 conf_thre=conf_thres,
                 nms_thre=nms_thres,
-                class_agnostic=False,
+                class_agnostic=not nms_class_aware,
             )
 
-            det = (
-                processed[0]
-                if processed and processed[0] is not None
-                else None
-            )
+            det = processed[0] if processed and processed[0] is not None else None
             preds = det.cpu() if det is not None else torch.empty((0, 6))
             preds_list = preds.tolist()
 
@@ -741,9 +848,7 @@ def detect_folder(
             for bbox, score, cls_id in _filter_detections(
                 preds_list, conf_thres, class_ids
             ):
-                assert (
-                    0 <= cls_id < YOLOX_NUM_CLASSES
-                ), f"Unexpected class id {cls_id}"
+                assert 0 <= cls_id < YOLOX_NUM_CLASSES, f"Unexpected class id {cls_id}"
                 x1_p, y1_p, x2_p, y2_p = bbox
                 x0 = max((x1_p - pad_x) / ratio, 0.0)
                 y0 = max((y1_p - pad_y) / ratio, 0.0)
@@ -787,6 +892,16 @@ def detect_folder(
         )
     logger.info("Processed {} frames in {:.2f}s", len(frames), elapsed)
 
+    if roi_json:
+        poly = _load_roi(roi_json)
+        out = _filter_by_roi(out, poly, roi_margin, keep_outside_roi)
+    if prelink_ball:
+        from .ball_temporal_link import link_ball_detections
+
+        link_ball_detections(out)
+    out.sort(key=lambda e: _extract_frame_id(e.get("frame")))
+    for e in out:
+        e["detections"].sort(key=lambda d: d.get("class", 0))
     save_json(out, out_json)
 
 
@@ -943,8 +1058,7 @@ def track_detections(
         dets = frames[frame_id]
         logger.debug("Frame {}: {} detections", frame_id, len(dets))
         tlwhs = [
-            [b[0], b[1], b[2] - b[0], b[3] - b[1]]
-            for b in (d["bbox"] for d in dets)
+            [b[0], b[1], b[2] - b[0], b[3] - b[1]] for b in (d["bbox"] for d in dets)
         ]
         scores = [d["score"] for d in dets]
         classes = [d["class"] for d in dets]
@@ -1054,8 +1168,24 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     if args.cmd == "track":
         try:
-            track_detections(
-                args.detections_json, args.output_json, args.min_score
+            from .track_objects import track_detections as _track
+
+            _track(
+                args.detections_json,
+                args.output_json,
+                args.min_score,
+                args.fps,
+                args.reid_reuse_window,
+                args.p_track_thresh,
+                args.p_high_thresh,
+                args.p_match_thresh,
+                args.p_track_buffer,
+                args.b_track_thresh,
+                args.b_high_thresh,
+                args.b_match_thresh,
+                args.b_track_buffer,
+                args.b_min_box_area,
+                args.b_max_aspect_ratio,
             )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Tracking failed")
@@ -1076,6 +1206,11 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.ball_img_size,
                     args.ball_classes,
                     args.save_splits,
+                    args.nms_class_aware,
+                    args.roi_json,
+                    args.roi_margin,
+                    args.keep_outside_roi,
+                    args.prelink_ball,
                 )
             else:
                 detect_folder(
@@ -1086,6 +1221,11 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.conf_thres,
                     args.nms_thres,
                     args.classes,
+                    args.nms_class_aware,
+                    args.roi_json,
+                    args.roi_margin,
+                    args.keep_outside_roi,
+                    args.prelink_ball,
                 )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Detection failed")

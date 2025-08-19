@@ -21,7 +21,10 @@ import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from shapely.geometry import Polygon
 
 try:  # pragma: no cover - optional dependency
     import yaml
@@ -40,6 +43,7 @@ PALETTE_SEED = 0
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
+
 
 def _class_label(value: int | str) -> str:
     """Return human readable class label."""
@@ -121,8 +125,11 @@ def _load_records(json_path: Path, keys: Tuple[str, ...]) -> Dict[str, List[dict
     result: Dict[str, List[dict]] = defaultdict(list)
     if not isinstance(data, list):
         raise ValueError("Invalid JSON structure: expected a list")
-    if data and isinstance(data[0], dict) and "frame" in data[0] and any(
-        k in data[0] for k in keys
+    if (
+        data
+        and isinstance(data[0], dict)
+        and "frame" in data[0]
+        and any(k in data[0] for k in keys)
     ):
         # Nested per-frame schema
         for rec in data:
@@ -171,7 +178,9 @@ def _load_tracks(json_path: Path) -> Dict[str, List[dict]]:
     return frame_map
 
 
-def _resolve_frame_path(frames_dir: Path, frame_key: str | int) -> Tuple[Optional[Path], Optional[int]]:
+def _resolve_frame_path(
+    frames_dir: Path, frame_key: str | int
+) -> Tuple[Optional[Path], Optional[int]]:
     """Resolve ``frame_key`` to an existing image path and numeric index."""
 
     if isinstance(frame_key, int):
@@ -233,6 +242,7 @@ def _parse_class_filter(value: Optional[str]) -> Tuple[set[str], set[int]]:
 # Drawing logic
 # ---------------------------------------------------------------------------
 
+
 def _draw_overlay(
     frames_dir: Path,
     frame_map: Dict[str, List[dict]],
@@ -248,6 +258,9 @@ def _draw_overlay(
     end: int,
     max_frames: int,
     mode: str,
+    roi_poly: Polygon | None,
+    only_court: bool,
+    primary_map: Dict[int, int],
 ) -> int:
     """Draw overlays for ``frame_map``.
 
@@ -307,16 +320,25 @@ def _draw_overlay(
             if x2 <= x1 or y2 <= y1:
                 LOGGER.warning("Degenerate bbox for frame %s", path.name)
                 continue
+            if roi_poly is not None and only_court:
+                from shapely.geometry import Point  # type: ignore
+
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                if not roi_poly.contains(Point(cx, cy)):
+                    continue
+            disp_tid: Optional[int] = None
             if mode == "track":
-                color = _track_color(det.get("track_id"))
+                tid = det.get("track_id")
+                disp_tid = primary_map.get(tid, tid)
+                color = _track_color(disp_tid)
             else:
                 color = _class_color(cls_val)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
             text_bits: List[str] = []
             if show_id and mode == "track":
-                tid = det.get("track_id")
-                if tid is not None:
-                    text_bits.append(f"#{tid}")
+                if disp_tid is not None:
+                    text_bits.append(f"#{disp_tid}")
             if label:
                 text_bits.append(cname)
                 if det.get("score") is not None:
@@ -370,6 +392,7 @@ def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
                 link.hardlink_to(f)
             except Exception:
                 import shutil
+
                 shutil.copyfile(f, link)
     cmd = [
         "ffmpeg",
@@ -398,13 +421,19 @@ def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     """Parse command line arguments."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--frames-dir", type=Path, required=True, help="Input frames directory")
     parser.add_argument(
-        "--output-dir", type=Path, required=True, help="Directory to save annotated frames"
+        "--frames-dir", type=Path, required=True, help="Input frames directory"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory to save annotated frames",
     )
     parser.add_argument("--detections-json", type=Path, help="Detections JSON file")
     parser.add_argument("--tracks-json", type=Path, help="Tracks JSON file")
@@ -414,7 +443,9 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default="auto",
         help="Overlay mode (default: auto)",
     )
-    parser.add_argument("--label", action="store_true", help="Draw class labels and scores")
+    parser.add_argument(
+        "--label", action="store_true", help="Draw class labels and scores"
+    )
     parser.add_argument("--id", action="store_true", help="Draw track IDs")
     parser.add_argument(
         "--confidence-thr", type=float, default=0.0, help="Minimum score threshold"
@@ -424,16 +455,37 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         type=str,
         help="Comma separated list of class names or IDs to keep",
     )
-    parser.add_argument("--palette-seed", type=int, default=0, help="Seed for color palette")
+    parser.add_argument(
+        "--palette-seed", type=int, default=0, help="Seed for color palette"
+    )
     parser.add_argument("--class-map", type=Path, help="JSON or YAML class name map")
-    parser.add_argument("--thickness", type=int, default=2, help="Bounding box thickness")
+    parser.add_argument(
+        "--thickness", type=int, default=2, help="Bounding box thickness"
+    )
     parser.add_argument("--font-scale", type=float, default=0.5, help="Text font scale")
-    parser.add_argument("--max-frames", type=int, default=0, help="Limit number of frames")
+    parser.add_argument(
+        "--max-frames", type=int, default=0, help="Limit number of frames"
+    )
     parser.add_argument("--start", type=int, default=0, help="Start frame index")
-    parser.add_argument("--end", type=int, default=-1, help="End frame index (-1 = last)")
+    parser.add_argument(
+        "--end", type=int, default=-1, help="End frame index (-1 = last)"
+    )
     parser.add_argument("--export-mp4", type=Path, help="Optional MP4 export path")
     parser.add_argument("--fps", type=int, default=25, help="FPS for MP4 export")
     parser.add_argument("--crf", type=int, default=23, help="CRF for MP4 export")
+    parser.add_argument("--roi-json", type=Path, help="Court ROI polygon JSON")
+    parser.add_argument(
+        "--only-court",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Draw only tracks inside ROI",
+    )
+    parser.add_argument(
+        "--primary-id-stick",
+        type=int,
+        default=0,
+        help="Sticky ID label for main player (0=disabled)",
+    )
     return parser.parse_args(argv)
 
 
@@ -481,6 +533,35 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 1
 
     allowed_names, allowed_ids = _parse_class_filter(args.only_class)
+
+    roi_poly: Optional[Polygon] = None
+    if args.roi_json:
+        from shapely.geometry import Polygon  # type: ignore
+
+        with args.roi_json.open() as fh:
+            data = json.load(fh)
+        pts = data.get("polygon") or data.get("roi")
+        if pts:
+            roi_poly = Polygon(pts)
+
+    primary_map: Dict[int, int] = {}
+    if mode == "track" and args.primary_id_stick > 0:
+        counts: Dict[int, int] = defaultdict(int)
+        for dets in frame_map.values():
+            for d in dets:
+                if d.get("class") not in {0, "person"}:
+                    continue
+                tid = d.get("track_id")
+                if tid is None:
+                    continue
+                bbox = d.get("bbox")
+                if not bbox:
+                    continue
+                counts[tid] += 1
+        if counts:
+            primary = max(counts, key=counts.get)
+            primary_map[primary] = args.primary_id_stick
+
     written = _draw_overlay(
         args.frames_dir,
         frame_map,
@@ -496,16 +577,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.end,
         args.max_frames,
         mode,
+        roi_poly,
+        args.only_court,
+        primary_map,
     )
 
     if written == 0:
-        LOGGER.warning(
-            "No overlays were drawn. Adjust filters or verify input files."
-        )
+        LOGGER.warning("No overlays were drawn. Adjust filters or verify input files.")
     if written and args.export_mp4:
         try:
             _export_mp4(args.output_dir, args.export_mp4, args.fps, args.crf)
-        except subprocess.CalledProcessError as exc:  # pragma: no cover - ffmpeg failure
+        except (
+            subprocess.CalledProcessError
+        ) as exc:  # pragma: no cover - ffmpeg failure
             LOGGER.error("ffmpeg failed: %s", exc)
             return 1
     return 0 if written else 1

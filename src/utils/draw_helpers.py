@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import cv2
+import re
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp"}
 
@@ -25,16 +26,30 @@ _FONT_SCALE = 0.7
 _FONT_LINE = cv2.LINE_AA
 
 
-def load_frames(frames_dir: Path, max_frames: int | None = None) -> List[Path]:
-    """Return sorted image paths from ``frames_dir``.
+def _extract_frame_id(path: Path) -> int:
+    """Return numeric frame index extracted from ``path``.
 
-    Only files with extensions from :data:`IMAGE_EXT` are returned.
+    Non-digit characters are ignored and the last group of digits is used. If no
+    digits are present, ``0`` is returned so sorting still succeeds.
     """
-    frames = sorted(
-        p
-        for p in frames_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_EXT
-    )
+
+    match = re.findall(r"\d+", path.stem)
+    return int(match[-1]) if match else 0
+
+
+def load_frames(frames_dir: Path, max_frames: int | None = None) -> List[Path]:
+    """Return numerically sorted image paths from ``frames_dir``.
+
+    Only files with extensions from :data:`IMAGE_EXT` are returned. The sort
+    order is determined by the numeric index embedded in the filename to avoid
+    lexicographic ordering issues (``frame_10.png`` comes after
+    ``frame_2.png``).
+    """
+
+    frames = [
+        p for p in frames_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXT
+    ]
+    frames.sort(key=_extract_frame_id)
     if max_frames is not None:
         frames = frames[:max_frames]
     return frames
