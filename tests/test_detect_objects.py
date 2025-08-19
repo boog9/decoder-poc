@@ -144,6 +144,12 @@ def test_allowed_class_alias_ball(tmp_path: Path, monkeypatch) -> None:
     assert captured["ids"] == [32]
 
 
+def test_class_id_alias_ball() -> None:
+    """Ensure ``_class_id_from_name`` resolves ball alias."""
+
+    assert dobj._class_id_from_name("ball") == 32
+
+
 def test_load_model_uses_local_yolox(monkeypatch) -> None:
     recorded = {}
 
