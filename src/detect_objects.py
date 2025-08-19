@@ -69,6 +69,32 @@ CLASS_ALIASES = {
     "person": "person",
 }
 
+
+def _class_id_from_name(name: str) -> int:
+    """Return the canonical class id for a given name.
+
+    Parameters
+    ----------
+    name:
+        Class name or alias.
+
+    Returns
+    -------
+    int
+        The class identifier corresponding to ``name``.
+
+    Raises
+    ------
+    KeyError
+        If the class name is not recognized.
+    """
+
+    key = _norm(name)
+    key = CLASS_ALIASES.get(key, key)
+    if key not in CLASS_NAME_TO_ID:
+        raise KeyError(f"Unknown class name: {name}")
+    return CLASS_NAME_TO_ID[key]
+
 # BYTETracker is imported lazily to avoid adding the vendored tracker to the
 # Python path when running detection-only workloads.
 BYTETracker = None
@@ -1004,7 +1030,7 @@ def track_detections(
     logger.info("Active tracks: {}", len(track_ids))
     summary = {
         CLASS_ID_TO_NAME[cid]: sum(1 for t in output if t["class"] == cid)
-        for cid in (CLASS_NAME_TO_ID["person"], CLASS_NAME_TO_ID["ball"])
+        for cid in (_class_id_from_name("person"), _class_id_from_name("ball"))
     }
     logger.info("Track summary: {}", summary)
     logger.info("Saved %d tracked detections to %s", saved, output_json)
