@@ -34,7 +34,7 @@ from src.utils.classes import CLASS_NAME_TO_ID
 def test_class_fields_are_int(tmp_path: Path, fname: str) -> None:
     data = [
         {"frame": 1, "class": CLASS_NAME_TO_ID["person"], "bbox": [0, 0, 1, 1]},
-        {"frame": 2, "class": CLASS_NAME_TO_ID["ball"], "bbox": [0, 0, 1, 1]},
+        {"frame": 2, "class": CLASS_NAME_TO_ID["sports ball"], "bbox": [0, 0, 1, 1]},
     ]
     path = tmp_path / fname
     path.write_text(json.dumps(data))

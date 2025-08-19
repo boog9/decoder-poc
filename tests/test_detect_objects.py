@@ -83,6 +83,12 @@ def test_parse_args_defaults() -> None:
     assert args.model == "yolox-s"
     assert args.img_size == 640
     assert args.classes is None
+    assert args.two_pass is True
+    assert args.person_conf == 0.55
+    assert args.person_img_size == 1280
+    assert args.ball_conf == 0.15
+    assert args.ball_img_size == 1536
+    assert args.save_splits is False
 
 
 def test_parse_args_custom_classes() -> None:
@@ -98,6 +104,44 @@ def test_parse_args_custom_classes() -> None:
         ]
     )
     assert args.classes == [1, 2]
+
+
+def test_merge_detections_merges() -> None:
+    a = [{"frame": "f1", "detections": [1]}, {"frame": "f2", "detections": [2]}]
+    b = [{"frame": "f1", "detections": [3]}, {"frame": "f2", "detections": [4]}]
+    merged = dobj.merge_detections(a, b)
+    assert merged[0]["detections"] == [1, 3]
+    assert merged[1]["detections"] == [2, 4]
+
+
+def test_allowed_class_alias_ball(tmp_path: Path, monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_filter(rows, conf, class_ids):
+        captured["ids"] = class_ids
+        return []
+
+    monkeypatch.setattr(dobj, "_filter_detections", fake_filter)
+    monkeypatch.setattr(
+        dobj,
+        "_preprocess_image",
+        lambda f, s: (dobj.torch.zeros(1, 3, 10, 10), 1.0, 0.0, 0.0, 10, 10),
+    )
+
+    class DummyModel:
+        def __call__(self, tensor):
+            return [dobj.torch.zeros((1, 6))]
+
+        head = types.SimpleNamespace(decode_outputs=lambda out, dtype: out)
+
+    utils_mod = types.ModuleType("yolox.utils")
+    utils_mod.postprocess = lambda *a, **k: [None]
+    sys.modules["yolox.utils"] = utils_mod
+
+    frame = tmp_path / "f.jpg"
+    frame.touch()
+    dobj.run_infer(DummyModel(), [frame], 640, 0.5, 0.5, {"ball"})
+    assert captured["ids"] == [32]
 
 
 def test_load_model_uses_local_yolox(monkeypatch) -> None:
@@ -213,12 +257,71 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     with out_json.open() as fh:
         data = json.load(fh)
     assert len(data) == 2
-    assert data[0]["detections"][0]["class"] == 0
-    bbox = data[0]["detections"][0]["bbox"]
+    det = data[0]["detections"][0]
+    assert det["class_id"] == 0
+    assert det["category"] == "person"
+    bbox = det["bbox"]
     assert all(isinstance(v, int) for v in bbox)
 
     sys.modules.pop("yolox.utils", None)
     sys.modules.pop("yolox", None)
+
+
+def test_detect_two_pass_merges(tmp_path: Path, monkeypatch) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "img1.jpg").write_bytes(b"0")
+    (frames / "img2.jpg").write_bytes(b"0")
+
+    calls: list = []
+
+    def fake_run_infer(model, frames_seq, img_size, conf, nms, allowed_classes):
+        calls.append((img_size, conf, nms, allowed_classes))
+        cid = 0 if "person" in allowed_classes else 32
+        out = []
+        for f in frames_seq:
+            out.append(
+                {
+                    "frame": f.name,
+                    "detections": [
+                        {
+                            "bbox": [0, 0, 1, 1],
+                            "score": 1.0,
+                            "class": cid,
+                            "class_id": cid,
+                            "category": dobj.CLASS_ID_TO_NAME[cid],
+                        }
+                    ],
+                }
+            )
+        return out
+
+    monkeypatch.setattr(dobj, "run_infer", fake_run_infer)
+    monkeypatch.setattr(dobj, "_load_model", lambda *a, **k: object())
+
+    out_json = tmp_path / "out.json"
+    dobj.detect_two_pass(
+        frames,
+        out_json,
+        "yolox-s",
+        0.5,
+        0.45,
+        960,
+        ["person"],
+        0.2,
+        0.3,
+        1280,
+        ["sports ball"],
+        save_splits=True,
+    )
+
+    with out_json.open() as fh:
+        merged = json.load(fh)
+    byf = {d["frame"]: d["detections"] for d in merged}
+    assert "img1.jpg" in byf and len(byf["img1.jpg"]) == 2
+    assert calls[0][0] == 960 and calls[1][0] == 1280
+    assert (tmp_path / "out_person.json").exists()
+    assert (tmp_path / "out_ball.json").exists()
 
 
 def test_track_detections_assigns_ids(tmp_path: Path, monkeypatch) -> None:

@@ -398,8 +398,19 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 
   ```bash
   docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
-      detect --frames-dir /app/frames --output-json /app/detections.json
+      detect --frames-dir /app/frames --output-json /app/detections.json \
+      --two-pass --save-splits
+
+  # single-pass mode
+  docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+      detect --frames-dir /app/frames --output-json /app/detections.json \
+      --two-pass=false --conf-thres 0.5 --nms-thres 0.45 --img-size 960
   ```
+
+  Supported frame extensions: `.jpg`, `.jpeg`, `.png`.
+
+  The ball pass uses a larger `img-size` and lower `conf` to catch the small,
+  fast-moving ball.
 
 > **Note:** The image sets `ENTRYPOINT ["python","-m","src.detect_objects"]`.
 > For one-off Python commands use:
@@ -409,13 +420,23 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 
   | Option | Description | Default |
   | ------ | ----------- | ------- |
-  | `--frames-dir` | Input PNG/JPG frames directory | **required** |
+  | `--frames-dir` | Input JPG/JPEG/PNG frames directory | **required** |
   | `--output-json` | Path to save detection results | **required** |
   | `--model` | YOLOX model size (`yolox-s` ... `yolox-x`) | `yolox-s` |
   | `--img-size` | Inference image size | `640` |
   | `--conf-thres` | Confidence threshold | `0.3` |
   | `--nms-thres` | NMS threshold | `0.45` |
   | `--classes` | Filter by class IDs | none |
+  | `--two-pass` | Enable person/ball sequential detection | `true` |
+  | `--person-conf` | Person detection confidence | `0.55` |
+  | `--person-nms` | Person NMS threshold | `0.45` |
+  | `--person-img-size` | Person inference image size | `1280` |
+  | `--person-classes` | Person classes | `person` |
+  | `--ball-conf` | Ball detection confidence | `0.15` |
+  | `--ball-nms` | Ball NMS threshold | `0.30` |
+  | `--ball-img-size` | Ball inference image size | `1536` |
+  | `--ball-classes` | Ball classes | `"sports ball"` |
+  | `--save-splits` | Save detections_person.json and detections_ball.json | `false` |
 
 
 ## Tracking Docker Image

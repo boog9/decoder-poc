@@ -15,7 +15,7 @@ from __future__ import annotations
 
 CLASS_NAME_TO_ID = {
     "person": 0,
-    "ball": 32,
+    "sports ball": 32,
 }
 
 CLASS_ID_TO_NAME = {v: k for k, v in CLASS_NAME_TO_ID.items()}
