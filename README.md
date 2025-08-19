@@ -428,14 +428,19 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--nms-thres` | NMS threshold | `0.45` |
   | `--classes` | Filter by class IDs | none |
   | `--two-pass` | Enable person/ball sequential detection | `true` |
-  | `--person-conf` | Person detection confidence | `0.55` |
+  | `--person-conf` | Person detection confidence (alias: --conf-person) | `0.55` |
   | `--person-nms` | Person NMS threshold | `0.45` |
   | `--person-img-size` | Person inference image size | `1280` |
   | `--person-classes` | Person classes | `person` |
-  | `--ball-conf` | Ball detection confidence | `0.15` |
+  | `--ball-conf` | Ball detection confidence (alias: --conf-ball) | `0.15` |
   | `--ball-nms` | Ball NMS threshold | `0.30` |
   | `--ball-img-size` | Ball inference image size | `1536` |
   | `--ball-classes` | Ball classes | `"sports ball"` |
+  | `--nms-class-aware` | Apply NMS per class | `true` |
+  | `--roi-json` | Court polygon JSON | _none_ |
+  | `--roi-margin` | ROI margin in pixels | `8` |
+  | `--keep-outside-roi` | Keep detections outside ROI | `false` |
+  | `--prelink-ball` | Interpolate ball gaps | `true` |
   | `--save-splits` | Save detections_person.json and detections_ball.json | `false` |
 
 
@@ -468,6 +473,50 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--detections-json` | Input JSON from detection step | **required** |
   | `--output-json` | Path to save tracked results | **required** |
   | `--min-score` | Detection score threshold | `0.3` |
+  | `--fps` | Video frame rate | `30` |
+  | `--reid-reuse-window` | Frames to keep IDs for reuse | `30` |
+  | `--p-track-thresh` | Person track threshold | `0.50` |
+  | `--p-high-thresh` | Person high detection threshold | `0.60` |
+  | `--p-match-thresh` | Person match threshold | `0.80` |
+  | `--p-track-buffer` | Person track buffer | `60` |
+  | `--b-track-thresh` | Ball track threshold | `0.15` |
+  | `--b-high-thresh` | Ball high detection threshold | `0.30` |
+  | `--b-match-thresh` | Ball match threshold | `0.85` |
+  | `--b-track-buffer` | Ball track buffer | `90` |
+  | `--b-min-box-area` | Minimum ball box area | `4` |
+  | `--b-max-aspect-ratio` | Maximum ball aspect ratio | `2.0` |
+
+## Tuning for Tennis
+
+Recommended thresholds for tennis court videos:
+
+| Flag | Person | Ball |
+| ---- | ------ | ---- |
+| `--person-conf` | 0.55 | - |
+| `--ball-conf` | - | 0.10 |
+| `--p-track-buffer` | 60 | - |
+| `--b-track-buffer` | - | 90 |
+
+Example commands:
+
+```bash
+docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+  detect --frames-dir /app/frames --output-json /app/detections.json \
+  --two-pass --model yolox-x \
+  --person-conf 0.55 --ball-conf 0.10 --nms-class-aware \
+  --roi-json /app/court_meta.json --roi-margin 8
+
+docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+  track --detections-json /app/detections.json --output-json /app/tracks.json \
+  --fps 30 --reid-reuse-window 30 \
+  --p-track-thresh 0.50 --p-high-thresh 0.60 --p-match-thresh 0.80 --p-track-buffer 60 \
+  --b-track-thresh 0.15 --b-high-thresh 0.30 --b-match-thresh 0.85 --b-track-buffer 90 \
+  --b-min-box-area 4 --b-max-aspect-ratio 2.0
+
+python -m src.draw_overlay \
+  --frames-dir frames --tracks-json tracks.json \
+  --output-dir frames_tracks --mode track --label --id --only-court
+```
 
 ## Single Image Detection Demo
 
