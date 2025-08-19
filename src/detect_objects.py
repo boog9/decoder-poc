@@ -37,6 +37,38 @@ from loguru import logger
 
 from .utils.classes import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
 
+# YOLOX postprocess is imported lazily so tests can monkeypatch
+# ``yolox.utils`` before the import occurs.
+_YOLOX_POSTPROCESS = None
+
+
+def _postprocess(*args, **kwargs):
+    """Lazy import wrapper for ``yolox.utils.postprocess``.
+
+    Importing lazily avoids hard dependencies at module import time and keeps
+    unit tests stable when ``yolox.utils`` is patched.
+    """
+
+    global _YOLOX_POSTPROCESS
+    if _YOLOX_POSTPROCESS is None:
+        from yolox.utils import postprocess as _PP  # type: ignore
+
+        _YOLOX_POSTPROCESS = _PP
+    return _YOLOX_POSTPROCESS(*args, **kwargs)
+
+
+# Normalization helper for class name lookups
+def _norm(s: str) -> str:
+    return " ".join(str(s).strip().lower().split())
+
+# Convenience aliases for common class names
+CLASS_ALIASES = {
+    "ball": "sports ball",
+    "sports_ball": "sports ball",
+    "sports-ball": "sports ball",
+    "person": "person",
+}
+
 # BYTETracker is imported lazily to avoid adding the vendored tracker to the
 # Python path when running detection-only workloads.
 BYTETracker = None
@@ -85,9 +117,6 @@ except Exception:  # pragma: no cover - optional dependency
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
 # Number of classes in the default COCO-trained YOLOX models.
-
-# Alias mapping for name variants coming from different datasets.
-CLASS_ALIASES = {"sports ball": "ball"}
 
 # Map CLI model names to torch.hub callable names.
 _YOLOX_MODEL_MAP = {
@@ -180,6 +209,16 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     det.add_argument("--conf-thres", type=float, default=0.3)
     det.add_argument("--nms-thres", type=float, default=0.45)
     det.add_argument("--classes", nargs="+", type=int, default=None)
+    det.add_argument("--two-pass", action=argparse.BooleanOptionalAction, default=True)
+    det.add_argument("--person-conf", type=float, default=0.55)
+    det.add_argument("--person-nms", type=float, default=0.45)
+    det.add_argument("--person-img-size", type=int, default=1280)
+    det.add_argument("--person-classes", nargs="+", default=["person"])
+    det.add_argument("--ball-conf", type=float, default=0.15)
+    det.add_argument("--ball-nms", type=float, default=0.30)
+    det.add_argument("--ball-img-size", type=int, default=1536)
+    det.add_argument("--ball-classes", nargs="+", default=["sports ball"])
+    det.add_argument("--save-splits", action="store_true")
 
     # Tracking subcommand
     tr = sub.add_parser("track", help="Run ByteTrack on YOLOX detections")
@@ -213,7 +252,9 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
     def _cls_id(c):
         if isinstance(c, int):
             return c
-        return CLASS_NAME_TO_ID.get(CLASS_ALIASES.get(c, c), -1)
+        key = _norm(c)
+        key = CLASS_ALIASES.get(key, key)
+        return CLASS_NAME_TO_ID.get(key, -1)
 
     if params == ["dets", "frame_id"]:
         cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[
@@ -433,6 +474,170 @@ def _filter_detections(
     return results
 
 
+def run_infer(
+    model: Any,
+    frames: Sequence[Path],
+    img_size: int,
+    conf: float,
+    nms: float,
+    allowed_classes: set[str | int] | None = None,
+) -> List[dict]:
+    """Run YOLOX inference on ``frames`` using ``model``.
+
+    Args:
+        model: Preloaded YOLOX model.
+        frames: Sequence of frame paths.
+        img_size: Inference image size.
+        conf: Confidence threshold.
+        nms: NMS threshold.
+        allowed_classes: Optional set of class names or IDs to keep.
+
+    Returns:
+        List of per-frame detection dictionaries.
+    """
+    if allowed_classes is None:
+        class_ids = list(range(YOLOX_NUM_CLASSES))
+    else:
+        class_ids: List[int] = []
+        for c in allowed_classes:
+            if isinstance(c, int):
+                class_ids.append(c)
+            else:
+                key = _norm(c)
+                key = CLASS_ALIASES.get(key, key)
+                if key not in CLASS_NAME_TO_ID:
+                    raise KeyError(f"Unknown class {c}")
+                class_ids.append(CLASS_NAME_TO_ID[key])
+
+    out: List[dict] = []
+    start = time.perf_counter()
+    with tqdm(total=len(frames), desc="Detecting") as pbar:
+        for frame in frames:
+            tensor, ratio, pad_x, pad_y, w0, h0 = _preprocess_image(frame, img_size)
+            with torch.no_grad():
+                raw = model(tensor)[0]
+            if isinstance(raw, list):
+                raw = model.head.decode_outputs(raw, dtype=raw[0].dtype)
+            elif raw.dim() == 2:
+                raw = raw.unsqueeze(0)
+
+            processed = _postprocess(
+                raw,
+                num_classes=YOLOX_NUM_CLASSES,
+                conf_thre=conf,
+                nms_thre=nms,
+                class_agnostic=False,
+            )
+
+            det = processed[0] if processed and processed[0] is not None else None
+            preds = det.cpu() if det is not None else torch.empty((0, 6))
+            preds_list = preds.tolist()
+
+            detections = []
+            for bbox, score, cls_id in _filter_detections(preds_list, conf, class_ids):
+                assert 0 <= cls_id < YOLOX_NUM_CLASSES, f"Unexpected class id {cls_id}"
+                x1_p, y1_p, x2_p, y2_p = bbox
+                x0 = max((x1_p - pad_x) / ratio, 0.0)
+                y0 = max((y1_p - pad_y) / ratio, 0.0)
+                x1 = min((x2_p - pad_x) / ratio, w0)
+                y1 = min((y2_p - pad_y) / ratio, h0)
+                ix0, iy0, ix1, iy1 = (
+                    int(round(x0)),
+                    int(round(y0)),
+                    int(round(x1)),
+                    int(round(y1)),
+                )
+                if ix1 > ix0 and iy1 > iy0:
+                    detections.append(
+                        {
+                            "bbox": [ix0, iy0, ix1, iy1],
+                            "score": float(score),
+                            "class": int(cls_id),
+                            "class_id": int(cls_id),
+                            "category": CLASS_ID_TO_NAME.get(cls_id, str(cls_id)),
+                        }
+                    )
+                else:
+                    logger.debug(
+                        "Discarded invalid box {} from {}",
+                        [x0, y0, x1, y1],
+                        frame.name,
+                    )
+            out.append({"frame": frame.name, "detections": detections})
+            pbar.update(1)
+
+    elapsed = time.perf_counter() - start
+    if torch.cuda.is_available():
+        free, total = torch.cuda.mem_get_info()
+        logger.info(
+            "GPU memory: {:.2f}/{:.2f} GB used",
+            (total - free) / 1024**3,
+            total / 1024**3,
+        )
+    logger.info("Processed {} frames in {:.2f}s", len(frames), elapsed)
+    return out
+
+
+def merge_detections(det_a: Sequence[dict], det_b: Sequence[dict]) -> List[dict]:
+    """Merge two detection lists frame-wise."""
+    by_a = {a["frame"]: a["detections"] for a in det_a}
+    by_b = {b["frame"]: b["detections"] for b in det_b}
+    frames = sorted(set(by_a) | set(by_b))
+    out: List[dict] = []
+    for f in frames:
+        da = by_a.get(f, [])
+        db = by_b.get(f, [])
+        out.append({"frame": f, "detections": da + db})
+    return out
+
+
+def save_json(data: Sequence[dict], path: Path) -> None:
+    """Write ``data`` to ``path`` as JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        json.dump(list(data), fh, indent=2)
+
+
+def detect_two_pass(
+    frames_dir: Path,
+    out_json: Path,
+    model_name: str,
+    person_conf: float,
+    person_nms: float,
+    person_img_size: int,
+    person_classes: Sequence[str],
+    ball_conf: float,
+    ball_nms: float,
+    ball_img_size: int,
+    ball_classes: Sequence[str],
+    save_splits: bool = False,
+) -> None:
+    """Run two-pass detection for person and ball classes."""
+    if not torch.cuda.is_available():  # pragma: no cover
+        raise RuntimeError("CUDA device required for YOLOX detection")
+    torch.backends.cudnn.benchmark = True
+    model = _load_model(model_name)
+    exts = {".jpg", ".jpeg", ".png"}
+    frames = sorted(
+        [p for p in frames_dir.iterdir() if p.suffix.lower() in exts],
+        key=lambda p: p.name,
+    )
+    if not frames:
+        logger.warning("No frames found in {}", frames_dir)
+        return
+    det_person = run_infer(
+        model, frames, person_img_size, person_conf, person_nms, set(person_classes)
+    )
+    det_ball = run_infer(
+        model, frames, ball_img_size, ball_conf, ball_nms, set(ball_classes)
+    )
+    merged = merge_detections(det_person, det_ball)
+    if save_splits:
+        save_json(det_person, out_json.with_name(out_json.stem + "_person.json"))
+        save_json(det_ball, out_json.with_name(out_json.stem + "_ball.json"))
+    save_json(merged, out_json)
+
+
 def detect_folder(
     frames_dir: Path,
     out_json: Path,
@@ -455,6 +660,7 @@ def detect_folder(
     """
     if not torch.cuda.is_available():  # pragma: no cover
         raise RuntimeError("CUDA device required for YOLOX detection")
+    torch.backends.cudnn.benchmark = True
 
     if class_ids is None:
         class_ids = list(range(YOLOX_NUM_CLASSES))
@@ -463,8 +669,9 @@ def detect_folder(
         [
             p
             for p in frames_dir.iterdir()
-            if p.suffix.lower() in {".jpg", ".png"}
-        ]
+            if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+        ],
+        key=lambda p: p.name,
     )
     if not frames:
         logger.warning("No frames found in {}", frames_dir)
@@ -487,11 +694,10 @@ def detect_folder(
                 raw = raw.unsqueeze(0)
 
             outputs = raw
-            from yolox.utils import postprocess
 
-            processed = postprocess(
+            processed = _postprocess(
                 outputs,
-                num_classes=80,
+                num_classes=YOLOX_NUM_CLASSES,
                 conf_thre=conf_thres,
                 nms_thre=nms_thres,
                 class_agnostic=False,
@@ -531,6 +737,8 @@ def detect_folder(
                             "bbox": [ix0, iy0, ix1, iy1],
                             "score": float(score),
                             "class": int(cls_id),
+                            "class_id": int(cls_id),
+                            "category": CLASS_ID_TO_NAME.get(cls_id, str(cls_id)),
                         }
                     )
                 else:
@@ -544,17 +752,16 @@ def detect_folder(
             pbar.update(1)
     elapsed = time.perf_counter() - start
 
-    free, total = torch.cuda.mem_get_info()
-    logger.info(
-        "GPU memory: {:.2f}/{:.2f} GB used",
-        (total - free) / 1024**3,
-        total / 1024**3,
-    )
+    if torch.cuda.is_available():
+        free, total = torch.cuda.mem_get_info()
+        logger.info(
+            "GPU memory: {:.2f}/{:.2f} GB used",
+            (total - free) / 1024**3,
+            total / 1024**3,
+        )
     logger.info("Processed {} frames in {:.2f}s", len(frames), elapsed)
 
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    with out_json.open("w") as f:
-        json.dump(out, f, indent=2)
+    save_json(out, out_json)
 
 
 def track_detections(
@@ -614,7 +821,7 @@ def track_detections(
                         continue
                     cls_id = cls_val
                 else:
-                    name = str(cls_val)
+                    name = _norm(cls_val)
                     cls_name = CLASS_ALIASES.get(name, name)
                     if cls_name not in CLASS_NAME_TO_ID:
                         logger.debug(
@@ -651,7 +858,7 @@ def track_detections(
                 continue
             cls_val = item.get("class")
             if isinstance(cls_val, str):
-                cls_key = CLASS_ALIASES.get(cls_val, cls_val)
+                cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
                 if cls_key not in CLASS_NAME_TO_ID:
                     logger.debug(
                         "Skip: unknown class name {} (frame {})",
@@ -829,15 +1036,31 @@ def main(argv: Iterable[str] | None = None) -> None:
             raise SystemExit(1) from exc
     else:
         try:
-            detect_folder(
-                args.frames_dir,
-                args.output_json,
-                args.model,
-                args.img_size,
-                args.conf_thres,
-                args.nms_thres,
-                args.classes,
-            )
+            if args.two_pass:
+                detect_two_pass(
+                    args.frames_dir,
+                    args.output_json,
+                    args.model,
+                    args.person_conf,
+                    args.person_nms,
+                    args.person_img_size,
+                    args.person_classes,
+                    args.ball_conf,
+                    args.ball_nms,
+                    args.ball_img_size,
+                    args.ball_classes,
+                    args.save_splits,
+                )
+            else:
+                detect_folder(
+                    args.frames_dir,
+                    args.output_json,
+                    args.model,
+                    args.img_size,
+                    args.conf_thres,
+                    args.nms_thres,
+                    args.classes,
+                )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Detection failed")
             raise SystemExit(1) from exc
