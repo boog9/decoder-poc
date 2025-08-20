@@ -261,6 +261,25 @@ def test_smooth_tracks_reduces_variance() -> None:
     assert after < before
 
 
+def test_smooth_tracks_skips_untracked_items() -> None:
+    """Ensure items without track_id or tlwh remain unchanged."""
+    tracks = [
+        {"frame": 0, "class": 0, "track_id": 1, "tlwh": [0, 0, 10, 10], "bbox": [0, 0, 10, 10]},
+        {"frame": 1, "class": 0, "track_id": 1, "tlwh": [10, 0, 10, 10], "bbox": [10, 0, 20, 10]},
+        {
+            "frame": 1,
+            "class": 100,
+            "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+            "score": 1.0,
+        },
+        {"frame": 2, "class": 0, "track_id": 2},
+    ]
+    before = json.loads(json.dumps(tracks))
+    out = tob._smooth_tracks(tracks, method="ema", alpha=0.5, window=3)
+    assert out[2] == before[2]
+    assert out[3] == before[3]
+
+
 def test_smooth_none_leaves_tracks_unchanged() -> None:
     tracks = [
         {"frame": 0, "class": 0, "track_id": 1, "tlwh": [0, 0, 10, 10], "bbox": [0, 0, 10, 10]},
