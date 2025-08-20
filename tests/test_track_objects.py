@@ -116,3 +116,73 @@ def test_load_detections_grouped_nested(tmp_path: Path) -> None:
     assert CLASS_NAME_TO_ID["sports ball"] in cls_map
     # ensure only bbox detections retained
     assert all("bbox" in d for v in cls_map.values() for d in v)
+
+
+def test_make_byte_tracker_variant_a(monkeypatch) -> None:
+    class DummyA:
+        def __init__(self, high_thresh, low_thresh, match_thresh, track_buffer, frame_rate):
+            self.params = {
+                "high_thresh": high_thresh,
+                "low_thresh": low_thresh,
+                "match_thresh": match_thresh,
+                "track_buffer": track_buffer,
+                "frame_rate": frame_rate,
+            }
+
+    dummy_mod = types.SimpleNamespace(BYTETracker=DummyA)
+    monkeypatch.setitem(sys.modules, "bytetrack_vendor.tracker.byte_tracker", dummy_mod)
+    monkeypatch.setattr(
+        tob,
+        "logger",
+        types.SimpleNamespace(debug=lambda *a, **k: None),
+        raising=False,
+    )
+
+    tracker = tob.make_byte_tracker(
+        track_thresh=0.5,
+        min_score=0.4,
+        match_thresh=0.7,
+        track_buffer=20,
+        fps=25,
+    )
+
+    assert isinstance(tracker, DummyA)
+    assert tracker.params["high_thresh"] == 0.4
+    assert tracker.params["low_thresh"] == min(0.4 * 0.5, 0.6)
+    assert tracker.params["match_thresh"] == 0.7
+    assert tracker.params["track_buffer"] == 20
+    assert tracker.params["frame_rate"] == 25
+
+
+def test_make_byte_tracker_variant_b(monkeypatch) -> None:
+    class DummyB:
+        def __init__(self, track_thresh, track_buffer, match_thresh, frame_rate):
+            self.params = {
+                "track_thresh": track_thresh,
+                "track_buffer": track_buffer,
+                "match_thresh": match_thresh,
+                "frame_rate": frame_rate,
+            }
+
+    dummy_mod = types.SimpleNamespace(BYTETracker=DummyB)
+    monkeypatch.setitem(sys.modules, "bytetrack_vendor.tracker.byte_tracker", dummy_mod)
+    monkeypatch.setattr(
+        tob,
+        "logger",
+        types.SimpleNamespace(debug=lambda *a, **k: None),
+        raising=False,
+    )
+
+    tracker = tob.make_byte_tracker(
+        track_thresh=0.5,
+        min_score=0.4,
+        match_thresh=None,
+        track_buffer=None,
+        fps=30,
+    )
+
+    assert isinstance(tracker, DummyB)
+    assert tracker.params["track_thresh"] == 0.5
+    assert tracker.params["match_thresh"] == 0.8
+    assert tracker.params["track_buffer"] == 30
+    assert tracker.params["frame_rate"] == 30

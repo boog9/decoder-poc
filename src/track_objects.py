@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import inspect
 from loguru import logger
 
 from .detect_objects import (
@@ -29,6 +30,80 @@ from .detect_objects import (
     _norm,
     _get_tlwh_from_track,
 )
+
+
+def make_byte_tracker(
+    *,
+    track_thresh: float | None,
+    min_score: float,
+    match_thresh: float | None,
+    track_buffer: int | None,
+    fps: int,
+):
+    """Return a ``BYTETracker`` instance compatible with multiple forks.
+
+    The constructor of :class:`BYTETracker` differs across forks. This helper
+    inspects the available parameters and initialises the tracker using the
+    appropriate signature while logging the chosen path.
+
+    Args:
+        track_thresh: Score threshold for variant B of the constructor. Falls
+            back to ``min_score`` when ``None``.
+        min_score: Minimum detection score; used as ``high_thresh`` for
+            variant A.
+        match_thresh: IoU matching threshold. Defaults to ``0.8`` when
+            ``None``.
+        track_buffer: Number of frames to keep lost tracks. Defaults to ``30``
+            when ``None``.
+        fps: Video frame rate.
+
+    Returns:
+        BYTETracker: Initialised tracker instance.
+    """
+
+    from bytetrack_vendor.tracker.byte_tracker import BYTETracker
+
+    sig = inspect.signature(BYTETracker.__init__)
+    params = sig.parameters
+
+    high_thresh = min_score
+    low_thresh = min(high_thresh * 0.5, 0.6)
+    match = match_thresh if match_thresh is not None else 0.8
+    buffer_ = track_buffer if track_buffer is not None else 30
+
+    if "high_thresh" in params:
+        logger.debug(
+            "BYTETracker init variant A: high_thresh={:.3f}, low_thresh={:.3f}, "
+            "match_thresh={:.3f}, track_buffer={}, fps={}",
+            high_thresh,
+            low_thresh,
+            match,
+            buffer_,
+            fps,
+        )
+        return BYTETracker(
+            high_thresh=high_thresh,
+            low_thresh=low_thresh,
+            match_thresh=match,
+            track_buffer=buffer_,
+            frame_rate=fps,
+        )
+
+    thresh = track_thresh if track_thresh is not None else high_thresh
+    logger.debug(
+        "BYTETracker init variant B: track_thresh={:.3f}, match_thresh={:.3f}, "
+        "track_buffer={}, fps={}",
+        thresh,
+        match,
+        buffer_,
+        fps,
+    )
+    return BYTETracker(
+        track_thresh=thresh,
+        track_buffer=buffer_,
+        match_thresh=match,
+        frame_rate=fps,
+    )
 
 
 def _load_detections_grouped(
@@ -220,8 +295,6 @@ def track_detections(
 ) -> None:
     """Track detections for persons and balls separately."""
 
-    from bytetrack_vendor.tracker.byte_tracker import BYTETracker
-
     with detections_json.open() as fh:
         raw = json.load(fh)
     if not isinstance(raw, list):
@@ -235,19 +308,19 @@ def track_detections(
     logger.info("tracking order: numeric by frame_index")
 
     trackers = {
-        CLASS_NAME_TO_ID["person"]: BYTETracker(
+        CLASS_NAME_TO_ID["person"]: make_byte_tracker(
             track_thresh=p_track_thresh,
-            high_thresh=p_high_thresh,
+            min_score=min_score,
             match_thresh=p_match_thresh,
             track_buffer=p_track_buffer,
-            frame_rate=fps,
+            fps=fps,
         ),
-        CLASS_NAME_TO_ID["sports ball"]: BYTETracker(
+        CLASS_NAME_TO_ID["sports ball"]: make_byte_tracker(
             track_thresh=b_track_thresh,
-            high_thresh=b_high_thresh,
+            min_score=min_score,
             match_thresh=b_match_thresh,
             track_buffer=b_track_buffer,
-            frame_rate=fps,
+            fps=fps,
         ),
     }
 
@@ -362,4 +435,4 @@ def _iou(b1: List[float], b2: List[float]) -> float:
     return inter / union if union else 0.0
 
 
-__all__ = ["track_detections", "_load_detections_grouped"]
+__all__ = ["track_detections", "_load_detections_grouped", "make_byte_tracker"]

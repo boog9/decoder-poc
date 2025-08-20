@@ -277,6 +277,10 @@ forks that expose `tlwh` as a property or method, and sometimes only provide
 `tlbr`. This prevents crashes such as ``AttributeError: 'STrack' object has no
 attribute '_tlwh'``.
 
+The tracker initialisation automatically inspects the `BYTETracker` constructor
+to support both the ``high_thresh/low_thresh`` and ``track_thresh`` variants,
+removing the need for manual configuration when switching forks.
+
 The detection CLI relies on the official `yolox` package installed from the
 GitHub repository, while the tracking CLI imports only
 `bytetrack_vendor.*` from the vendored ByteTrack tree. There are no shared
