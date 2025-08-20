@@ -21,6 +21,7 @@ def test_detect_imports_clean() -> None:
     """Ensure detection environment uses official YOLOX without ByteTrack."""
     sys.modules.pop("bytetrack_vendor", None)
     assert "bytetrack_vendor" not in sys.modules
+    sys.modules.pop("yolox", None)
     sys.modules.setdefault("yolox", types.SimpleNamespace(__version__="0.0"))
     import yolox  # type: ignore  # official package expected at runtime
 

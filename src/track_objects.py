@@ -49,6 +49,56 @@ def _load_detections_grouped(
     frames: Dict[int, Dict[int, List[dict]]] = {}
     prev = -1
     for item in raw:
+        if "detections" in item:
+            frame_id = _extract_frame_id(item.get("frame"))
+            if frame_id is None:
+                continue
+            if frame_id < prev:
+                logger.warning("Out-of-order frame %s after %s", frame_id, prev)
+            prev = frame_id
+            for det in item.get("detections", []):
+                cls_val = det.get("class")
+                if cls_val is None:
+                    logger.warning("Skipping detection with null class in %s", det)
+                    continue
+                if isinstance(cls_val, str):
+                    cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
+                    if cls_key not in CLASS_NAME_TO_ID:
+                        logger.warning(
+                            "Skipping detection with unknown class '%s' in %s",
+                            cls_val,
+                            det,
+                        )
+                        continue
+                    cls_id = CLASS_NAME_TO_ID[cls_key]
+                else:
+                    try:
+                        cls_id = int(cls_val)
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Skipping detection with invalid class %r in %s",
+                            cls_val,
+                            det,
+                        )
+                        continue
+                    if cls_id not in CLASS_ID_TO_NAME:
+                        logger.warning(
+                            "Skipping detection with unknown class id %s in %s",
+                            cls_id,
+                            det,
+                        )
+                        continue
+                score = float(det.get("score", 0.0))
+                if score < min_score:
+                    continue
+                bbox = _normalize_bbox(det.get("bbox"))
+                if bbox is None:
+                    continue
+                frames.setdefault(frame_id, {}).setdefault(cls_id, []).append(
+                    {"bbox": bbox, "score": score}
+                )
+            continue
+
         frame_id = _extract_frame_id(item.get("frame"))
         if frame_id is None:
             continue
@@ -56,14 +106,35 @@ def _load_detections_grouped(
             logger.warning("Out-of-order frame %s after %s", frame_id, prev)
         prev = frame_id
         cls_val = item.get("class")
+        if cls_val is None:
+            logger.warning("Skipping detection with null class in %s", item)
+            continue
         if isinstance(cls_val, str):
             cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
             if cls_key not in CLASS_NAME_TO_ID:
+                logger.warning(
+                    "Skipping detection with unknown class '%s' in %s",
+                    cls_val,
+                    item,
+                )
                 continue
             cls_id = CLASS_NAME_TO_ID[cls_key]
         else:
-            cls_id = int(cls_val)
+            try:
+                cls_id = int(cls_val)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping detection with invalid class %r in %s",
+                    cls_val,
+                    item,
+                )
+                continue
             if cls_id not in CLASS_ID_TO_NAME:
+                logger.warning(
+                    "Skipping detection with unknown class id %s in %s",
+                    cls_id,
+                    item,
+                )
                 continue
         score = float(item.get("score", 0.0))
         if score < min_score:
@@ -76,6 +147,58 @@ def _load_detections_grouped(
         )
 
     return dict(sorted(frames.items()))
+
+
+def _extract_court_map(raw: list) -> Dict[int, List[List[float]]]:
+    """Return mapping of frame index to court polygon.
+
+    Supports both nested and flat detection formats and normalises class
+    aliases. Only detections labelled as ``tennis_court`` are kept. Any
+    entry without a valid polygon is skipped silently.
+    """
+
+    court_cls = CLASS_NAME_TO_ID.get("tennis_court")
+    result: Dict[int, List[List[float]]] = {}
+    for item in raw:
+        if "detections" in item:
+            frame_id = _extract_frame_id(item.get("frame"))
+            if frame_id is None:
+                continue
+            for det in item.get("detections", []):
+                cls_val = det.get("class")
+                if isinstance(cls_val, str):
+                    cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
+                    if cls_key != "tennis_court":
+                        continue
+                else:
+                    try:
+                        if int(cls_val) != court_cls:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                poly = det.get("polygon")
+                if poly:
+                    result[frame_id] = poly
+            continue
+
+        frame_id = _extract_frame_id(item.get("frame"))
+        if frame_id is None:
+            continue
+        cls_val = item.get("class")
+        if isinstance(cls_val, str):
+            cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
+            if cls_key != "tennis_court":
+                continue
+        else:
+            try:
+                if int(cls_val) != court_cls:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        poly = item.get("polygon")
+        if poly:
+            result[frame_id] = poly
+    return result
 
 
 def track_detections(
@@ -99,7 +222,15 @@ def track_detections(
 
     from bytetrack_vendor.tracker.byte_tracker import BYTETracker
 
+    with detections_json.open() as fh:
+        raw = json.load(fh)
+    if not isinstance(raw, list):
+        raise ValueError("detections-json must contain a list")
+
     frames = _load_detections_grouped(detections_json, min_score)
+
+    court_cls = CLASS_NAME_TO_ID.get("tennis_court")
+    court_map = _extract_court_map(raw)
 
     logger.info("tracking order: numeric by frame_index")
 
@@ -187,7 +318,18 @@ def track_detections(
                 r for r in reuse[cls_id] if frame_id - r["frame"] <= reid_reuse_window
             ]
 
-    out.sort(key=lambda d: (d["frame"], d["class"], d["track_id"]))
+    if court_cls is not None:
+        for frame_id, poly in court_map.items():
+            out.append(
+                {
+                    "frame": frame_id,
+                    "class": court_cls,
+                    "polygon": poly,
+                    "score": 1.0,
+                }
+            )
+
+    out.sort(key=lambda d: (d["frame"], d.get("class", -1), d.get("track_id", -1)))
     with output_json.open("w") as fh:
         json.dump(out, fh, indent=2)
 

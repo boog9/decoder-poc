@@ -43,4 +43,4 @@ def test_class_fields_are_int(tmp_path: Path, fname: str) -> None:
         loaded = json.load(fh)
 
     assert all(isinstance(d.get("class"), int) for d in loaded)
-    assert {d["class"] for d in loaded} <= {0, 32}
+    assert {d["class"] for d in loaded} <= {0, 32, 100}

@@ -26,7 +26,9 @@ sys.modules.setdefault("torch", types.SimpleNamespace())
 sys.modules.setdefault("numpy", types.SimpleNamespace(ndarray=object))
 
 from src.utils.draw_helpers import load_frames  # noqa: E402
+import src.track_objects as tobj  # noqa: E402
 from src.track_objects import _load_detections_grouped  # noqa: E402
+tobj.logger = types.SimpleNamespace(warning=lambda *a, **k: None)
 
 
 def test_load_frames_numeric(tmp_path: Path) -> None:

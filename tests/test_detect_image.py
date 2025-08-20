@@ -27,7 +27,7 @@ torch_mod.cuda = types.SimpleNamespace(is_available=lambda: True)
 torch_mod.hub = types.SimpleNamespace(load=lambda *a, **k: None)
 torch_mod.device = lambda x: x
 torch_mod.no_grad = contextlib.nullcontext
-sys.modules.setdefault("torch", torch_mod)
+sys.modules["torch"] = torch_mod
 tv_mod = types.ModuleType("torchvision")
 transforms_mod = types.ModuleType("torchvision.transforms")
 functional_mod = types.ModuleType("torchvision.transforms.functional")

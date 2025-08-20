@@ -258,7 +258,7 @@ def test_detect_folder_writes_json(tmp_path: Path, monkeypatch) -> None:
     )
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s", 640)
+    dobj.detect_folder(frames, out_json, "yolox-s", 640, detect_court=False)
 
     with out_json.open() as fh:
         data = json.load(fh)
@@ -319,6 +319,7 @@ def test_detect_two_pass_merges(tmp_path: Path, monkeypatch) -> None:
         1280,
         ["sports ball"],
         save_splits=True,
+        detect_court=False,
     )
 
     with out_json.open() as fh:
@@ -823,7 +824,7 @@ def test_detect_folder_uses_decode(monkeypatch, tmp_path: Path) -> None:
     )
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s", 640)
+    dobj.detect_folder(frames, out_json, "yolox-s", 640, detect_court=False)
 
     assert head.called
     with out_json.open() as fh:
@@ -879,7 +880,7 @@ def test_detect_folder_single_frame(monkeypatch, tmp_path: Path) -> None:
     )
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s", 640)
+    dobj.detect_folder(frames, out_json, "yolox-s", 640, detect_court=False)
 
     with out_json.open() as fh:
         data = json.load(fh)
@@ -949,7 +950,7 @@ def test_detect_folder_respects_classes(monkeypatch, tmp_path: Path) -> None:
     )
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s", 640, class_ids=[42])
+    dobj.detect_folder(frames, out_json, "yolox-s", 640, class_ids=[42], detect_court=False)
 
     with out_json.open() as fh:
         data = json.load(fh)
@@ -1007,7 +1008,7 @@ def test_detect_folder_seven_element(monkeypatch, tmp_path: Path) -> None:
     )
 
     out_json = tmp_path / "det.json"
-    dobj.detect_folder(frames, out_json, "yolox-s", 640)
+    dobj.detect_folder(frames, out_json, "yolox-s", 640, detect_court=False)
 
     with out_json.open() as fh:
         data = json.load(fh)
