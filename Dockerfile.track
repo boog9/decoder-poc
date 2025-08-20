@@ -8,6 +8,7 @@ LABEL org.opencontainers.image.source="https://github.com/boog9/decoder-poc" \
 # Avoid interactive prompts when installing packages
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
+ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -27,6 +28,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install -U pip setuptools wheel
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install -r /tmp/requirements.txt
+
+# Install NumPy explicitly before OpenCV to satisfy runtime requirements
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip3 install numpy opencv-python-headless
 
 WORKDIR /app
 COPY . /app
