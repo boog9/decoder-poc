@@ -19,6 +19,7 @@ import types
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
+np.int32 = int
 
 cv2_dummy = types.ModuleType('cv2')
 cv2_dummy.imread = lambda *a, **k: None
@@ -148,8 +149,131 @@ def test_track_color_consistent_over_frames(tmp_path: Path, monkeypatch: pytest.
         -1,
         0,
         "track",
+        True,
+        None,
+        False,
+        {},
     )
     assert res == 5
     assert dummy.rect_colors[0] == expected5
     assert dummy.rect_colors[1] == expected7
     assert dummy.rect_colors[2] == expected5
+
+
+def test_draw_overlay_renders_court_polygon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "frame_000001.png").write_bytes(b"0")
+    frame_map = {"frame_000001.png": [{"class": 100, "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}]}
+
+    class DummyCV2:
+        def __init__(self) -> None:
+            self.poly_count = 0
+
+        def imread(self, path: str, flag=None):
+            return types.SimpleNamespace(shape=(10, 10, 3))
+
+        def imwrite(self, path: str, img) -> bool:
+            return True
+
+        def polylines(self, img, pts, is_closed, color, thickness):
+            self.poly_count += 1
+
+        def rectangle(self, *a, **k):
+            pass
+
+        def putText(self, *a, **k):
+            pass
+
+        FONT_HERSHEY_SIMPLEX = 0
+        LINE_AA = 16
+        IMREAD_COLOR = 1
+
+    dummy = DummyCV2()
+    monkeypatch.setattr(dov, "cv2", dummy)
+
+    out = tmp_path / "out"
+    res = dov._draw_overlay(
+        frames,
+        frame_map,
+        out,
+        False,
+        False,
+        0.0,
+        set(),
+        set(),
+        1,
+        0.5,
+        0,
+        -1,
+        0,
+        "class",
+        True,
+        None,
+        False,
+        {},
+    )
+    assert res == 1
+    assert dummy.poly_count == 1
+
+
+def test_draw_overlay_skips_court_polygon_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "frame_000001.png").write_bytes(b"0")
+    frame_map = {"frame_000001.png": [{"class": 100, "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}]}
+
+    class DummyCV2:
+        def __init__(self) -> None:
+            self.poly_count = 0
+
+        def imread(self, path: str, flag=None):
+            return types.SimpleNamespace(shape=(10, 10, 3))
+
+        def imwrite(self, path: str, img) -> bool:
+            return True
+
+        def polylines(self, img, pts, is_closed, color, thickness):
+            self.poly_count += 1
+
+        def rectangle(self, *a, **k):
+            pass
+
+        def putText(self, *a, **k):
+            pass
+
+        FONT_HERSHEY_SIMPLEX = 0
+        LINE_AA = 16
+        IMREAD_COLOR = 1
+
+    dummy = DummyCV2()
+    monkeypatch.setattr(dov, "cv2", dummy)
+    warnings: list = []
+    monkeypatch.setattr(dov.LOGGER, "warning", lambda *a, **k: warnings.append(a))
+
+    out = tmp_path / "out"
+    res = dov._draw_overlay(
+        frames,
+        frame_map,
+        out,
+        False,
+        False,
+        0.0,
+        set(),
+        set(),
+        1,
+        0.5,
+        0,
+        -1,
+        0,
+        "class",
+        False,
+        None,
+        False,
+        {},
+    )
+    assert res == 1
+    assert dummy.poly_count == 0
+    assert not warnings

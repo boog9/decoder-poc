@@ -42,6 +42,8 @@ from loguru import logger
 
 from .utils.classes import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
 
+COURT_CLASS_ID = CLASS_NAME_TO_ID["tennis_court"]
+
 # YOLOX postprocess is imported lazily so tests can monkeypatch
 # ``yolox.utils`` before the import occurs.
 _YOLOX_POSTPROCESS = None
@@ -73,6 +75,9 @@ CLASS_ALIASES = {
     "sports_ball": "sports ball",
     "sports-ball": "sports ball",
     "person": "person",
+    "tennis_court": "tennis_court",
+    "tennis-court": "tennis_court",
+    "court": "tennis_court",
 }
 
 
@@ -302,6 +307,24 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=True,
         help="Apply NMS per class (default)",
     )
+    det.add_argument(
+        "--detect-court",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run tennis court detector (use --no-detect-court to disable)",
+    )
+    det.add_argument("--court-device", choices=["auto", "cuda", "cpu"], default="auto")
+    det.add_argument(
+        "--court-use-homography",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    det.add_argument(
+        "--court-refine-kps",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    det.add_argument("--court-weights", type=Path, default=None)
     det.add_argument("--roi-json", type=Path, default=None)
     det.add_argument("--roi-margin", type=float, default=8.0)
     det.add_argument(
@@ -723,6 +746,11 @@ def detect_two_pass(
     roi_margin: float = 8.0,
     keep_outside_roi: bool = False,
     prelink_ball: bool = True,
+    detect_court: bool = True,
+    court_device: str = "auto",
+    court_use_homography: bool = False,
+    court_refine_kps: bool = False,
+    court_weights: Path | None = None,
 ) -> None:
     """Run two-pass detection for person and ball classes."""
     if not torch.cuda.is_available():  # pragma: no cover
@@ -763,6 +791,32 @@ def detect_two_pass(
         from .ball_temporal_link import link_ball_detections
 
         link_ball_detections(merged)
+    if detect_court:
+        try:
+            from .court_detector import detect_court as _detect_court
+
+            court_list = _detect_court(
+                frames_dir,
+                device=court_device,
+                use_homography=court_use_homography,
+                refine_kps=court_refine_kps,
+                weights=court_weights,
+            )
+            court_map = {d["frame"]: d["polygon"] for d in court_list}
+            for frame in merged:
+                poly = court_map.get(frame["frame"])  # type: ignore[arg-type]
+                if poly:
+                    frame["detections"].append(
+                        {
+                            "class": COURT_CLASS_ID,
+                            "class_id": COURT_CLASS_ID,
+                            "category": "tennis_court",
+                            "polygon": poly,
+                            "score": 1.0,
+                        }
+                    )
+        except Exception as exc:  # pragma: no cover - optional feature
+            logger.exception("Court detection failed: {}", exc)
     merged.sort(key=lambda e: _extract_frame_id(e.get("frame")))
     for e in merged:
         e["detections"].sort(key=lambda d: d.get("class", 0))
@@ -785,6 +839,11 @@ def detect_folder(
     roi_margin: float = 8.0,
     keep_outside_roi: bool = False,
     prelink_ball: bool = True,
+    detect_court: bool = True,
+    court_device: str = "auto",
+    court_use_homography: bool = False,
+    court_refine_kps: bool = False,
+    court_weights: Path | None = None,
 ) -> None:
     """Run detection over ``frames_dir`` and write results.
 
@@ -899,6 +958,32 @@ def detect_folder(
         from .ball_temporal_link import link_ball_detections
 
         link_ball_detections(out)
+    if detect_court:
+        try:
+            from .court_detector import detect_court as _detect_court
+
+            court_list = _detect_court(
+                frames_dir,
+                device=court_device,
+                use_homography=court_use_homography,
+                refine_kps=court_refine_kps,
+                weights=court_weights,
+            )
+            court_map = {d["frame"]: d["polygon"] for d in court_list}
+            for frame in out:
+                poly = court_map.get(frame["frame"])  # type: ignore[arg-type]
+                if poly:
+                    frame["detections"].append(
+                        {
+                            "class": COURT_CLASS_ID,
+                            "class_id": COURT_CLASS_ID,
+                            "category": "tennis_court",
+                            "polygon": poly,
+                            "score": 1.0,
+                        }
+                    )
+        except Exception as exc:  # pragma: no cover - optional feature
+            logger.exception("Court detection failed: {}", exc)
     out.sort(key=lambda e: _extract_frame_id(e.get("frame")))
     for e in out:
         e["detections"].sort(key=lambda d: d.get("class", 0))
@@ -1211,6 +1296,11 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.roi_margin,
                     args.keep_outside_roi,
                     args.prelink_ball,
+                    args.detect_court,
+                    args.court_device,
+                    args.court_use_homography,
+                    args.court_refine_kps,
+                    args.court_weights,
                 )
             else:
                 detect_folder(
@@ -1226,6 +1316,11 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.roi_margin,
                     args.keep_outside_roi,
                     args.prelink_ball,
+                    args.detect_court,
+                    args.court_device,
+                    args.court_use_homography,
+                    args.court_refine_kps,
+                    args.court_weights,
                 )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Detection failed")

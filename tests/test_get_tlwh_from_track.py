@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+import contextlib
 
 class _DummyTqdm:
     def __enter__(self):
@@ -43,16 +44,20 @@ np_mod.array = lambda a, dtype=None: a
 np_mod.asarray = lambda a, dtype=None: a
 np_mod.concatenate = lambda arrs, axis=0: sum(arrs, [])
 np_mod.float32 = "float32"
+np_mod.int32 = int
 sys.modules.setdefault("numpy", np_mod)
 torch_mod = types.ModuleType("torch")
 torch_mod.cuda = types.SimpleNamespace(is_available=lambda: True)
+torch_mod.no_grad = contextlib.nullcontext
 sys.modules.setdefault("torch", torch_mod)
 sys.modules.setdefault("torch.cuda", torch_mod.cuda)
 sys.modules.setdefault("yolox", types.ModuleType("yolox"))
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import src.detect_objects as dobj
-dobj.torch.cuda.is_available = lambda: True
+dobj.torch = types.SimpleNamespace(
+    cuda=types.SimpleNamespace(is_available=lambda: True)
+)
 
 
 def test_get_tlwh_from_track_variants() -> None:

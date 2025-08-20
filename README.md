@@ -127,7 +127,7 @@ python -m src.draw_overlay \
     --frames-dir frames_min \
     --tracks-json tracks.json \
     --output-dir frames_tracks \
-    --mode track --label --id
+    --mode track --label --id --draw-court
 
 python -m src.draw_overlay \
     --frames-dir frames_min \
@@ -135,6 +135,8 @@ python -m src.draw_overlay \
     --output-dir frames_det \
     --mode class --label
 ```
+
+Use `--draw-court=false` to hide the court polygon.
 
 - `--palette-seed`: Stabilise the colour palette globally.
 - `--class-map`: Optional JSON/YAML mapping of class IDs to names.
@@ -399,7 +401,12 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   ```bash
   docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
       detect --frames-dir /app/frames --output-json /app/detections.json \
-      --two-pass --save-splits
+      --two-pass --detect-court
+
+  # disable court detection explicitly
+  docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+      detect --frames-dir /app/frames --output-json /app/detections.json \
+      --two-pass --no-detect-court
 
   # single-pass mode
   docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
@@ -428,6 +435,11 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--nms-thres` | NMS threshold | `0.45` |
   | `--classes` | Filter by class IDs | none |
   | `--two-pass` | Enable person/ball sequential detection | `true` |
+  | `--detect-court` | Detect tennis court polygon | `true` |
+  | `--court-device` | Device for court detector (`auto`, `cuda`, `cpu`) | `auto` |
+  | `--court-use-homography` | Enable homography refinement (placeholder) | `false` |
+  | `--court-refine-kps` | Enable keypoint refinement (placeholder) | `false` |
+  | `--court-weights` | Optional path to court model weights | _none_ |
   | `--person-conf` | Person detection confidence (alias: --conf-person) | `0.55` |
   | `--person-nms` | Person NMS threshold | `0.45` |
   | `--person-img-size` | Person inference image size | `1280` |
@@ -601,3 +613,40 @@ draw   -> overlays in out/frames_viz and optional MP4
 Image name: `decoder-draw:latest` (CPU only). Mount the repository as `/app`.
 Parameters: run `docker run --rm decoder-draw:latest --help`.
 Modes: `--mode auto|detect|track` (default `auto` picks `track` if `--tracks-json` exists, otherwise `detect`).
+
+## Court Detection
+
+Service/Docker image name: `decoder-court:latest`
+
+Purpose: detect the tennis court polygon for each input frame.
+
+### Startup example
+
+```bash
+DOCKER_BUILDKIT=1 docker build -f services/court_detector/Dockerfile.court -t decoder-court:latest .
+
+docker run --rm -v $(pwd):/app decoder-court:latest \
+  --frames-dir /app/frames --output-json /app/court.json
+```
+
+- Mount `/app` to access frames and outputs
+- GPU not required
+
+### Parameters
+
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `--frames-dir` | Input directory with frame images | **required** |
+| `--output-json` | Output file for court polygons | **required** |
+| `--help` | Show CLI help | - |
+
+The output `court.json` has one entry per frame:
+
+```json
+[
+  {"frame": "frame_000001.png", "class": 100, "polygon": [[0,0],[639,0],[639,359],[0,359]]}
+]
+```
+Court detections are always stored with `class=100`. Downstream detection and
+tracking stages rely on this mapping. If the court is not detected for a frame,
+the entry is simply omitted; it should never appear with a null class value.

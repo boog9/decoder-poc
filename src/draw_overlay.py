@@ -36,8 +36,9 @@ import numpy as np
 from PIL import Image
 
 LOGGER = logging.getLogger("draw_overlay")
-CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball"}
+CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball", 100: "tennis_court"}
 PALETTE_SEED = 0
+COURT_CLASS_ID = 100
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +259,7 @@ def _draw_overlay(
     end: int,
     max_frames: int,
     mode: str,
+    draw_court: bool,
     roi_poly: Polygon | None,
     only_court: bool,
     primary_map: Dict[int, int],
@@ -294,6 +296,13 @@ def _draw_overlay(
             continue
         h, w = img.shape[:2]
         for det in dets:
+            if det.get("class") == COURT_CLASS_ID and det.get("polygon"):
+                if draw_court:
+                    pts = np.array(
+                        [[int(x), int(y)] for x, y in det["polygon"]], dtype=np.int32
+                    )
+                    cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
+                continue
             score = float(det.get("score", 0.0))
             if score < confidence_thr:
                 continue
@@ -448,6 +457,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--id", action="store_true", help="Draw track IDs")
     parser.add_argument(
+        "--draw-court",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Draw tennis court polygon",
+    )
+    parser.add_argument(
         "--confidence-thr", type=float, default=0.0, help="Minimum score threshold"
     )
     parser.add_argument(
@@ -577,6 +592,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.end,
         args.max_frames,
         mode,
+        args.draw_court,
         roi_poly,
         args.only_court,
         primary_map,
