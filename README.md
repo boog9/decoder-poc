@@ -615,6 +615,7 @@ draw   -> overlays in out/frames_viz and optional MP4
 ```
 
 Image name: `decoder-draw:latest` (CPU only). Mount the repository as `/app`.
+Includes `loguru` (>=0.7.0) for logging.
 Parameters: run `docker run --rm decoder-draw:latest --help`.
 Modes: `--mode auto|detect|track` (default `auto` picks `track` if `--tracks-json` exists, otherwise `detect`).
 
