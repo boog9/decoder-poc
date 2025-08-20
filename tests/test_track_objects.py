@@ -233,6 +233,17 @@ def test_stitch_predictive_merges_gap() -> None:
     assert ids[3] == 1
 
 
+def test_stitch_predictive_handles_redirects() -> None:
+    tracks = [
+        {"frame": 0, "class": 0, "track_id": 10, "tlwh": [0, 0, 10, 10]},
+        {"frame": 2, "class": 0, "track_id": 20, "tlwh": [3, 0, 10, 10]},
+        {"frame": 4, "class": 0, "track_id": 30, "tlwh": [6, 0, 10, 10]},
+    ]
+    stitched = tob._stitch_predictive(tracks, iou_thr=0.5, max_gap=5)
+    ids = [t["track_id"] for t in stitched if t["class"] == 0]
+    assert set(ids) == {10}
+
+
 def _var(vals: list[float]) -> float:
     mean = sum(vals) / len(vals)
     return sum((v - mean) ** 2 for v in vals) / len(vals)
