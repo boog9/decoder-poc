@@ -470,7 +470,11 @@ def _smooth_tracks(
     alpha: float = 0.3,
     window: int = 7,
 ) -> List[dict]:
-    """Smooth track coordinates in-place."""
+    """Smooth track coordinates in-place for tracked items only.
+
+    Applies to entries that have BOTH 'track_id' and 'tlwh'.
+    Non-tracked items (e.g., court polygons) are left untouched.
+    """
 
     if method == "none":
         return tracks
@@ -478,34 +482,47 @@ def _smooth_tracks(
     from collections import defaultdict
 
     groups: Dict[int, List[dict]] = defaultdict(list)
+    # Filter only tracked detections with TLWH
     for det in tracks:
-        groups[int(det["track_id"])].append(det)
+        if "track_id" in det and "tlwh" in det:
+            try:
+                groups[int(det["track_id"])].append(det)
+            except Exception:
+                # Skip malformed IDs silently
+                continue
 
     for dets in groups.values():
+        if len(dets) < 2:
+            # Nothing to smooth for 0/1-length tracks
+            continue
         dets.sort(key=lambda d: d["frame"])
+
         if method == "ema":
-            prev = dets[0]["tlwh"]
-            for det in dets[1:]:
+            prev = dets[0]["tlwh"][:]
+            for det in dets:
                 cur = det["tlwh"]
                 prev = [alpha * c + (1 - alpha) * p for c, p in zip(cur, prev)]
                 det["tlwh"] = prev
+
         elif method == "sg":
             try:
                 from scipy.signal import savgol_filter  # type: ignore
-            except Exception:  # pragma: no cover - optional dependency
+            except Exception:
+                # SciPy not available, skip gracefully
                 continue
-            if len(dets) >= window and window % 2 == 1:
-                arrs = [
-                    [d["tlwh"][i] for d in dets]
-                    for i in range(4)
-                ]
+            # Window must be odd and <= len(dets)
+            if window % 2 == 1 and len(dets) >= window:
+                series = [[d["tlwh"][i] for d in dets] for i in range(4)]
                 for i in range(4):
-                    arrs[i] = savgol_filter(arrs[i], window, 2).tolist()
-                for d, x, y, w, h in zip(dets, *arrs):
+                    series[i] = savgol_filter(series[i], window, 2).tolist()
+                for d, x, y, w, h in zip(dets, *series):
                     d["tlwh"] = [float(x), float(y), float(w), float(h)]
+
+        # Keep bbox in sync with tlwh
         for det in dets:
             x, y, w, h = det["tlwh"]
             det["bbox"] = [x, y, x + w, y + h]
+
     return tracks
 
 
