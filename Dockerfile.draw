@@ -10,6 +10,6 @@ COPY src/ /app/src
 
 # Minimal dependencies for headless rendering
 RUN python -m pip install --upgrade pip && \
-    pip install --no-cache-dir opencv-python-headless pillow numpy
+    pip install --no-cache-dir opencv-python-headless pillow numpy loguru
 
 ENTRYPOINT ["tini", "--", "python", "-m", "src.draw_overlay"]
