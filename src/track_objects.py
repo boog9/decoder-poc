@@ -385,6 +385,12 @@ def _stitch_predictive(
     scale_tol: float = 0.35,
 ) -> List[dict]:
     """Merge short track fragments based on predictive IoU matching."""
+    alias: Dict[int, int] = {}
+
+    def _canon(tid: int) -> int:
+        while tid in alias:
+            tid = alias[tid]
+        return tid
 
     person_cls = CLASS_NAME_TO_ID.get("person")
     by_id: Dict[int, List[dict]] = {}
@@ -400,6 +406,7 @@ def _stitch_predictive(
 
     for i in range(len(frags)):
         tid2, dets2 = frags[i]
+        tid2 = _canon(tid2)
         start2 = dets2[0]["frame"]
         cx2 = dets2[0]["tlwh"][0] + dets2[0]["tlwh"][2] / 2.0
         cy2 = dets2[0]["tlwh"][1] + dets2[0]["tlwh"][3] / 2.0
@@ -408,6 +415,7 @@ def _stitch_predictive(
         best_iou = 0.0
         for j in range(i):
             tid1, dets1 = frags[j]
+            tid1 = _canon(tid1)
             end1 = dets1[-1]["frame"]
             gap = start2 - end1
             if gap <= 0 or gap > max_gap:
@@ -443,11 +451,15 @@ def _stitch_predictive(
             if iou > best_iou:
                 best_iou = iou
                 best = tid1
-        if best is not None and best != tid2:
+        if best is not None:
+            best = _canon(best)
+        tgt = _canon(tid2)
+        if best is not None and best != tgt:
             for det in dets2:
                 det["track_id"] = best
-            by_id[best].extend(dets2)
-            by_id.pop(tid2, None)
+            by_id.setdefault(best, []).extend(dets2)
+            alias[tgt] = best
+            by_id.pop(tgt, None)
 
     return tracks
 
@@ -621,7 +633,7 @@ def track_detections(
     if pre_court_gate:
         if poly_frames > 0:
             logger.info(
-                "court polygons available on %d/%d frames (%.1f%%)",
+                "court polygons available on {}/{} frames ({:.1f}%)",
                 poly_frames,
                 total_frames,
                 (poly_frames / max(total_frames, 1)) * 100.0,
@@ -636,7 +648,11 @@ def track_detections(
         for cls_map in frames.values():
             all_persons.extend(cls_map.get(person_id, []))
         min_area = _pre_min_area_quantile(all_persons, pre_min_area_q)
-        logger.info("pre-min-area-q %.2f -> min_area %.2f", pre_min_area_q, min_area)
+        logger.info(
+            "pre-min-area-q {:.2f} -> min_area {:.2f}",
+            pre_min_area_q,
+            min_area,
+        )
 
     if appearance_refine:
         if frames_dir is None:
@@ -650,7 +666,7 @@ def track_detections(
             appearance_refine = False
 
     logger.info(
-        "tracker params: p_match_thresh=%.2f p_track_buffer=%d reuse=%d fps=%d",
+        "tracker params: p_match_thresh={:.2f} p_track_buffer={} reuse={} fps={}",
         p_match_thresh,
         p_track_buffer,
         reid_reuse_window,
@@ -678,7 +694,7 @@ def track_detections(
 
     # Active and reuse caches for person and ball trackers
     logger.info(
-        "Person tracker: match_thresh=%.2f buffer=%d reuse=%d",
+        "Person tracker: match_thresh={:.2f} buffer={} reuse={}",
         p_match_thresh,
         p_track_buffer,
         reid_reuse_window,
@@ -725,7 +741,7 @@ def track_detections(
                 if n_start and frame_id % 30 == 0:
                     removed = n_start - len(dets)
                     logger.debug(
-                        "frame %d: pre-filters removed %d/%d person detections (%.1f%%)",
+                        "frame {}: pre-filters removed {}/{} person detections ({:.1f}%)",
                         frame_id,
                         removed,
                         n_start,
