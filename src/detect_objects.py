@@ -343,23 +343,179 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
     # Tracking subcommand
     tr = sub.add_parser("track", help="Run ByteTrack on YOLOX detections")
-    tr.add_argument("--detections-json", type=Path, required=True)
-    tr.add_argument("--output-json", type=Path, required=True)
-    tr.add_argument("--min-score", type=float, default=0.3)
-    tr.add_argument("--fps", type=int, default=30)
-    tr.add_argument("--reid-reuse-window", type=int, default=30)
+    tr.add_argument(
+        "--detections-json",
+        type=Path,
+        required=True,
+        help="Detections JSON from `decoder-detect`.",
+    )
+    tr.add_argument(
+        "--output-json",
+        type=Path,
+        required=True,
+        help="Output path for tracked detections JSON.",
+    )
+    tr.add_argument(
+        "--min-score", type=float, default=0.3, help="Minimum detection score to keep"
+    )
+    tr.add_argument("--fps", type=int, default=30, help="Video frame rate")
+    tr.add_argument(
+        "--reid-reuse-window",
+        type=int,
+        default=125,
+        help="Frames to keep vanished IDs for short-term reuse",
+    )
+    # Pre-filters
+    tr.add_argument(
+        "--pre-nms-iou",
+        type=float,
+        default=0.0,
+        help="Greedy NMS IoU for person detections; 0 disables",
+    )
+    tr.add_argument(
+        "--pre-min-area-q",
+        type=float,
+        default=0.0,
+        help="Quantile for minimum person box area; 0 disables",
+    )
+    tr.add_argument(
+        "--pre-topk",
+        type=int,
+        default=0,
+        help="Keep only top-K person detections per frame",
+    )
+    tr.add_argument(
+        "--pre-court-gate",
+        action="store_true",
+        default=False,
+        help="Drop persons whose centre lies outside the court polygon",
+    )
+    tr.add_argument(
+        "--court-json",
+        type=Path,
+        default=None,
+        help="Optional court polygon JSON; falls back to detections",
+    )
     # Person tracker params
-    tr.add_argument("--p-track-thresh", type=float, default=0.50)
-    tr.add_argument("--p-high-thresh", type=float, default=0.60)
-    tr.add_argument("--p-match-thresh", type=float, default=0.80)
-    tr.add_argument("--p-track-buffer", type=int, default=60)
+    tr.add_argument(
+        "--p-track-thresh",
+        type=float,
+        default=0.50,
+        help="Person track threshold for BYTETracker variant B",
+    )
+    tr.add_argument(
+        "--p-high-thresh",
+        type=float,
+        default=0.60,
+        help="Person high detection threshold for variant A",
+    )
+    tr.add_argument(
+        "--p-match-thresh",
+        type=float,
+        default=0.60,
+        help="IoU match threshold for person tracker",
+    )
+    tr.add_argument(
+        "--p-track-buffer",
+        type=int,
+        default=125,
+        help="Frames to keep lost person tracks",
+    )
     # Ball tracker params
-    tr.add_argument("--b-track-thresh", type=float, default=0.15)
-    tr.add_argument("--b-high-thresh", type=float, default=0.30)
-    tr.add_argument("--b-match-thresh", type=float, default=0.85)
-    tr.add_argument("--b-track-buffer", type=int, default=90)
-    tr.add_argument("--b-min-box-area", type=float, default=4.0)
-    tr.add_argument("--b-max-aspect-ratio", type=float, default=2.0)
+    tr.add_argument(
+        "--b-track-thresh",
+        type=float,
+        default=0.15,
+        help="Ball track threshold for BYTETracker",
+    )
+    tr.add_argument(
+        "--b-high-thresh",
+        type=float,
+        default=0.30,
+        help="Ball high detection threshold",
+    )
+    tr.add_argument(
+        "--b-match-thresh",
+        type=float,
+        default=0.85,
+        help="IoU match threshold for ball tracker",
+    )
+    tr.add_argument(
+        "--b-track-buffer",
+        type=int,
+        default=90,
+        help="Frames to keep lost ball tracks",
+    )
+    tr.add_argument(
+        "--b-min-box-area",
+        type=float,
+        default=4.0,
+        help="Minimum ball bounding box area",
+    )
+    tr.add_argument(
+        "--b-max-aspect-ratio",
+        type=float,
+        default=2.0,
+        help="Maximum ball box aspect ratio",
+    )
+    # Post-process
+    tr.add_argument(
+        "--stitch", action="store_true", default=False, help="Enable predictive ID stitching"
+    )
+    tr.add_argument(
+        "--stitch-iou", type=float, default=0.55, help="IoU threshold for stitching"
+    )
+    tr.add_argument(
+        "--stitch-gap", type=int, default=5, help="Maximum gap in frames for stitching"
+    )
+    tr.add_argument(
+        "--stitch-speed",
+        type=float,
+        default=50.0,
+        help="Maximum centre speed between fragments",
+    )
+    tr.add_argument(
+        "--stitch-aspect-tol",
+        type=float,
+        default=0.35,
+        help="Allowed aspect ratio change when stitching",
+    )
+    tr.add_argument(
+        "--stitch-scale-tol",
+        type=float,
+        default=0.35,
+        help="Allowed scale change when stitching",
+    )
+    tr.add_argument(
+        "--smooth",
+        choices=["none", "ema", "sg"],
+        default="none",
+        help="Trajectory smoothing method",
+    )
+    tr.add_argument(
+        "--smooth-alpha", type=float, default=0.3, help="EMA smoothing factor"
+    )
+    tr.add_argument(
+        "--smooth-window", type=int, default=7, help="Savitzky-Golay window size"
+    )
+    tr.add_argument(
+        "--appearance-refine",
+        action="store_true",
+        default=False,
+        help="Refine IDs using HSV colour histograms",
+    )
+    tr.add_argument(
+        "--appearance-lambda",
+        type=float,
+        default=0.3,
+        help="Cosine similarity threshold for appearance refine",
+    )
+    tr.add_argument(
+        "--frames-dir",
+        type=Path,
+        default=None,
+        help="Frames directory for appearance refinement",
+    )
 
     # Parse provided arguments or ``sys.argv`` when ``argv`` is ``None``.
     args = parser.parse_args(argv)
@@ -1252,6 +1408,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         )
 
     if args.cmd == "track":
+        if args.appearance_refine and args.frames_dir is None:
+            logger.warning(
+                "--appearance-refine requested but --frames-dir missing; skipping"
+            )
         try:
             from .track_objects import track_detections as _track
 
@@ -1271,6 +1431,23 @@ def main(argv: Iterable[str] | None = None) -> None:
                 args.b_track_buffer,
                 args.b_min_box_area,
                 args.b_max_aspect_ratio,
+                args.pre_nms_iou,
+                args.pre_min_area_q,
+                args.pre_topk,
+                args.pre_court_gate,
+                args.court_json,
+                args.stitch,
+                args.stitch_iou,
+                args.stitch_gap,
+                args.stitch_speed,
+                args.stitch_aspect_tol,
+                args.stitch_scale_tol,
+                args.smooth,
+                args.smooth_alpha,
+                args.smooth_window,
+                args.appearance_refine,
+                args.appearance_lambda,
+                args.frames_dir,
             )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Tracking failed")

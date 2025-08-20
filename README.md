@@ -262,10 +262,10 @@ YOLOX modules need to be built.
 Only detections with score above ``--min-score`` are considered.
 
 ```bash
-python -m src.detect_objects track \
-    --detections-json detections.json \
-    --output-json tracks.json \
-    --min-score 0.30
+docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+    track --detections-json /app/detections.json \
+          --output-json /app/tracks.json \
+          --min-score 0.30
 ```
 
 * ``--detections-json`` – input file produced by the detection step.
@@ -350,7 +350,7 @@ python -m src.draw_tracks \
     --frames-dir frames/ \
     --tracks-json tracks.json \
     --output-video out.mp4 \
-    --fps 25
+    --fps 30
 ```
 
 | Option | Description |
@@ -479,8 +479,27 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 
   ```bash
   docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
-      track --detections-json /app/detections.json --output-json /app/tracks.json
+      track --detections-json /app/detections.json \
+            --output-json /app/tracks.json \
+            --fps 30 --min-score 0.10
   ```
+
+  **Enhanced example with pre/post processing:**
+
+  ```bash
+  docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+      track --detections-json /app/detections.json \
+            --output-json /app/tracks.json \
+            --fps 30 --min-score 0.28 \
+            --pre-nms-iou 0.6 --pre-min-area-q 0.5 --pre-topk 3 --pre-court-gate \
+            --p-match-thresh 0.60 --p-track-buffer 125 --reid-reuse-window 125 \
+            --stitch --stitch-iou 0.55 --stitch-gap 5 \
+            --smooth ema --smooth-alpha 0.3
+  ```
+
+  *Optional colour check:* add `--appearance-refine --appearance-lambda 0.3 --frames-dir /app/frames`.
+
+  > Note: `--fps` must match the source frame rate. Default 30 FPS.
 
 - **Parameters:**
 
@@ -490,17 +509,38 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--output-json` | Path to save tracked results | **required** |
   | `--min-score` | Detection score threshold | `0.3` |
   | `--fps` | Video frame rate | `30` |
-  | `--reid-reuse-window` | Frames to keep IDs for reuse | `30` |
+  | `--reid-reuse-window` | Frames to keep IDs for reuse | `125` |
+  | `--pre-nms-iou` | Greedy NMS IoU for persons | `0.0` |
+  | `--pre-min-area-q` | Quantile filter for small boxes | `0.0` |
+  | `--pre-topk` | Keep top-K persons per frame | `0` |
+  | `--pre-court-gate` | Enable court polygon gating | `False` |
+  | `--court-json` | Path to court polygons | `None` |
   | `--p-track-thresh` | Person track threshold | `0.50` |
   | `--p-high-thresh` | Person high detection threshold | `0.60` |
-  | `--p-match-thresh` | Person match threshold | `0.80` |
-  | `--p-track-buffer` | Person track buffer | `60` |
+  | `--p-match-thresh` | Person match threshold | `0.60` |
+  | `--p-track-buffer` | Person track buffer | `125` |
   | `--b-track-thresh` | Ball track threshold | `0.15` |
   | `--b-high-thresh` | Ball high detection threshold | `0.30` |
   | `--b-match-thresh` | Ball match threshold | `0.85` |
   | `--b-track-buffer` | Ball track buffer | `90` |
   | `--b-min-box-area` | Minimum ball box area | `4` |
   | `--b-max-aspect-ratio` | Maximum ball aspect ratio | `2.0` |
+  | `--stitch` | Enable predictive ID stitching | `False` |
+  | `--smooth` | Trajectory smoothing method | `none` |
+  | `--appearance-refine` | Enable HSV appearance matching | `False` |
+
+  **Quick sanity check:**
+
+  ```bash
+  docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+    track --detections-json /app/detections.json \
+          --output-json /app/tracks.json \
+          --fps 30 --min-score 0.28 \
+          --pre-nms-iou 0.6 --pre-min-area-q 0.5 --pre-topk 3 --pre-court-gate \
+          --p-match-thresh 0.60 --p-track-buffer 125 --reid-reuse-window 125 \
+          --stitch --stitch-iou 0.55 --stitch-gap 5 \
+          --smooth ema --smooth-alpha 0.3
+  ```
 
 ## Tuning for Tennis
 
@@ -510,7 +550,7 @@ Recommended thresholds for tennis court videos:
 | ---- | ------ | ---- |
 | `--person-conf` | 0.55 | - |
 | `--ball-conf` | - | 0.10 |
-| `--p-track-buffer` | 60 | - |
+| `--p-track-buffer` | 125 | - |
 | `--b-track-buffer` | - | 90 |
 
 Example commands:
@@ -524,8 +564,8 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
 
 docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
   track --detections-json /app/detections.json --output-json /app/tracks.json \
-  --fps 30 --reid-reuse-window 30 \
-  --p-track-thresh 0.50 --p-high-thresh 0.60 --p-match-thresh 0.80 --p-track-buffer 60 \
+  --fps 30 --reid-reuse-window 125 \
+  --p-track-thresh 0.50 --p-high-thresh 0.60 --p-match-thresh 0.60 --p-track-buffer 125 \
   --b-track-thresh 0.15 --b-high-thresh 0.30 --b-match-thresh 0.85 --b-track-buffer 90 \
   --b-min-box-area 4 --b-max-aspect-ratio 2.0
 
