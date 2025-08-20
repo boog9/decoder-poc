@@ -623,7 +623,7 @@ Purpose: detect the tennis court polygon for each input frame.
 ### Startup example
 
 ```bash
-DOCKER_BUILDKIT=1 docker build -f services/court_detector/Dockerfile.court -t decoder-court:latest .
+docker build -t decoder-court:latest -f Dockerfile.court .
 
 docker run --rm -v $(pwd):/app decoder-court:latest \
   --frames-dir /app/frames --output-json /app/court.json
@@ -631,6 +631,7 @@ docker run --rm -v $(pwd):/app decoder-court:latest \
 
 - Mount `/app` to access frames and outputs
 - GPU not required
+- Includes `loguru` (>=0.7.0) for logging
 
 ### Parameters
 
