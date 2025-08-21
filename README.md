@@ -227,6 +227,17 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --stitch --stitch-iou 0.55 --stitch-gap 12 \
         --smooth ema --smooth-alpha 0.3
 ```
+ROI note: --roi-json приймає або один полігон { "polygon": [...] }, або court.json (список полігонів по кадрах). У випадку списку використовується полігон з першого кадру. Якщо камера рухома — краще не використовувати ROI на етапі Detect, а покладатися на --pre-court-gate у Track.
+
+ROI debug:
+
+```bash
+# Перевірка контура корту з ROI:
+python -m src.draw_overlay --only-court --roi-json /app/court.json \
+  --frames-dir /app/frames --detections-json /app/detections.json \
+  --out-dir /app/preview_court
+```
+
 
 Lower b-match-thresh + higher b-track-buffer стабілізують ID м’яча. Для гравців — зменшений p-match-thresh і збільшений p-track-buffer допомагають утримати ID біля сітки. pre-min-area-q=0.15 не ріже далекого гравця, а stitch=* зливає короткі обриви. appearance-refine активується автоматично, коли передано --frames-dir.
 
