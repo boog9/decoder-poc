@@ -39,9 +39,9 @@ def test_detect_court_returns_polygon(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(cd.Image, "open", lambda p: DummyCtx())
 
-    result = cd.detect_court(frames)
+    result = cd.detect_court(frames, weights=Path("dummy.pth"), sample_rate=1, stabilize="none")
     assert len(result) == 2
     names = {r["frame"] for r in result}
     assert all(f"frame_{i:06d}.png" in names for i in range(1, 3))
     assert all("polygon" in r and len(r["polygon"]) >= 4 for r in result)
-    assert all(r.get("class") == 100 for r in result)
+    assert all(r.get("placeholder") is False for r in result)

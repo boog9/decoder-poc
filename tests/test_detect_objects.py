@@ -1020,3 +1020,28 @@ def test_detect_folder_seven_element(monkeypatch, tmp_path: Path) -> None:
     sys.modules.pop("yolox", None)
 
 
+def test_pre_court_gate_info_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("INFO")
+    det_json = tmp_path / "d.json"
+    det_json.write_text("[]")
+    out_json = tmp_path / "o.json"
+
+    track_mod = types.ModuleType("src.track_objects")
+    track_mod.track_detections = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "src.track_objects", track_mod)
+
+    dobj.main(
+        [
+            "track",
+            "--detections-json",
+            str(det_json),
+            "--output-json",
+            str(out_json),
+            "--pre-court-gate",
+        ]
+    )
+    assert "pre-court-gate activates" in caplog.text
+
+
