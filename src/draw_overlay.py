@@ -460,10 +460,14 @@ def _draw_overlay(
 
 
 def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
-    """Export frames in ``output_dir`` to an MP4 using ffmpeg image2 demuxer.
+    """Export frames in ``output_dir`` to an MP4 using the ffmpeg image2 demuxer.
 
-    To guarantee ordering, stage symlinks as 000001.png, 000002.png, ...
+    To guarantee ordering, stage symlinks as ``000001.png``, ``000002.png``, ...
+    The function attempts to use ``libx264`` and gracefully falls back when the
+    codec or CRF flag is unavailable.
     """
+
+    import subprocess, shlex, sys  # noqa: F401
 
     exts = {".png", ".jpg", ".jpeg"}
     files = sorted(f for f in output_dir.iterdir() if f.suffix.lower() in exts)
@@ -489,7 +493,9 @@ def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
                 import shutil
 
                 shutil.copyfile(f, link)
-    cmd = [
+
+    pattern = str(tmp / "%06d.png")
+    base = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
@@ -500,16 +506,55 @@ def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
         "-f",
         "image2",
         "-i",
-        str(tmp / "%06d.png"),
-        "-c:v",
-        "libx264",
-        "-crf",
-        str(crf),
-        "-pix_fmt",
-        "yuv420p",
-        str(mp4_path),
+        pattern,
     ]
-    subprocess.run(cmd, check=True)
+
+    cmd = base + ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    if crf is not None and crf >= 0:
+        cmd += ["-crf", str(crf)]
+    cmd += [str(mp4_path)]
+
+    def run(cmd_list: List[str]) -> subprocess.CompletedProcess[str]:
+        LOGGER.debug("Running: %s", shlex.join(cmd_list))
+        return subprocess.run(cmd_list, check=True, capture_output=True, text=True)
+
+    try:
+        run(cmd)
+        return
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or "") + (e.stdout or "")
+
+        if "Unrecognized option 'crf'" in err or "Error setting option crf" in err:
+            cmd_no_crf = [c for c in cmd if c not in ("-crf", str(crf))]
+            if crf is not None and crf >= 0:
+                try:
+                    cmd_x264_params: List[str] = []
+                    skip = False
+                    for i, c in enumerate(cmd_no_crf):
+                        if skip:
+                            skip = False
+                            continue
+                        if c == "-c:v" and i + 1 < len(cmd_no_crf) and cmd_no_crf[i + 1] == "libx264":
+                            cmd_x264_params.extend([c, "libx264", "-x264-params", f"crf={crf}"])
+                            skip = True
+                        else:
+                            cmd_x264_params.append(c)
+                    run(cmd_x264_params)
+                    return
+                except subprocess.CalledProcessError:
+                    pass
+            try:
+                run(cmd_no_crf)
+                return
+            except subprocess.CalledProcessError as e2:
+                err = (e2.stderr or "") + (e2.stdout or "")
+
+        if "Unknown encoder 'libx264'" in err or "Encoder (codec libx264) not found" in err:
+            cmd_mpeg4 = base + ["-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p", str(mp4_path)]
+            run(cmd_mpeg4)
+            return
+
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -579,7 +624,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--export-mp4", type=Path, help="Optional MP4 export path")
     parser.add_argument("--fps", type=int, default=25, help="FPS for MP4 export")
-    parser.add_argument("--crf", type=int, default=23, help="CRF for MP4 export")
+    parser.add_argument(
+        "--crf",
+        type=int,
+        default=23,
+        help="CRF for libx264; set -1 to disable",
+    )
     parser.add_argument("--roi-json", type=Path, help="Court ROI polygon JSON")
     parser.add_argument(
         "--only-court",
