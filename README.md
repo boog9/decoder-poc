@@ -157,7 +157,7 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --frames-dir /app/frames_min \
   --tracks-json /app/tracks.json \
   --output-dir /app/frames_tracks \
-  --mode track --label --id --draw-court
+  --mode track --label --id --draw-court --draw-court-lines
 
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   -m src.draw_overlay \
@@ -167,7 +167,8 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --mode class --label
 ```
 
-Use `--draw-court=false` to hide the court polygon.
+Use `--draw-court=false` to hide the court polygon and
+`--no-draw-court-lines` to omit internal lines.
 
 `--roi-json` accepts either a single polygon `{ "polygon": [...] }` or a `court.json` file with per-frame polygons (the polygon from the first frame is used).
 
@@ -182,7 +183,7 @@ Example rendering only the court outline:
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   -m src.draw_overlay \
   --frames-dir /app/frames --detections-json /app/detections.json \
-  --out-dir /app/preview_court --only-court --roi-json /app/court.json
+  --output-dir /app/preview_court --only-court --draw-court-lines --roi-json /app/court.json
 ```
 
 The legacy `src.draw_tracks` module is kept for backwards compatibility and
@@ -209,7 +210,8 @@ End-to-end приклад з тюнінгами під теніс (Docker-first)
 ```bash
 # 1) court detection -> /app/court.json
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir /app/frames --output-json /app/court.json
+  --frames-dir /app/frames --output-json /app/court.json \
+  --weights /app/weights/tcd.pth --sample-rate 5 --stabilize ema
 
 # 2) detect – class-aware NMS, ROI gate, ball interpolation up to 5 frames
 docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
@@ -232,8 +234,7 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --stitch --stitch-iou 0.55 --stitch-gap 12 \
         --smooth ema --smooth-alpha 0.3
 ```
-> `pre-court-gate` is effective only if `court.json` contains a real court polygon. If
-> `decoder-court` still outputs a full-frame polygon (placeholder), either disable the gate (`--no-pre-court-gate`) or provide a valid `court.json`.
+> `pre-court-gate` works only with a real court polygon. If `court.json` is a full-frame placeholder, the gate has no effect—either disable it (`--no-pre-court-gate`) or run `decoder-court` with weights to obtain real geometry.
 
 If you see `pre-court-gate disabled: detected full-frame court polygon`, this is expected for placeholder polygons.
 
@@ -244,9 +245,9 @@ ROI debug:
 
 ```bash
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
-  -m src.draw_overlay --only-court --roi-json /app/court.json \
+  -m src.draw_overlay --only-court --draw-court-lines --roi-json /app/court.json \
   --frames-dir /app/frames --detections-json /app/detections.json \
-  --out-dir /app/preview_court
+  --output-dir /app/preview_court
 ```
 
 
@@ -263,8 +264,8 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --mode track \
   --frames-dir /app/frames \
   --tracks-json /app/tracks.json \
-  --out-dir /app/preview_tracks \
-  --draw-court --roi-json /app/court.json
+  --output-dir /app/preview_tracks \
+  --draw-court --draw-court-lines --roi-json /app/court.json
 
 # Optional MP4 export (25 fps)
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
@@ -272,8 +273,8 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --mode track \
   --frames-dir /app/frames \
   --tracks-json /app/tracks.json \
-  --out-dir /app/preview_tracks \
-  --export-mp4 /app/preview_tracks.mp4 --fps 25 --draw-court --roi-json /app/court.json
+  --output-dir /app/preview_tracks \
+  --export-mp4 /app/preview_tracks.mp4 --fps 25 --draw-court --draw-court-lines --roi-json /app/court.json
 ```
 
 Запускати можна всередині будь-якого образу, де є Python + OpenCV. Найпростіше — у decoder-track:latest з примонтованим репозиторієм:
@@ -283,9 +284,9 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   -m src.draw_overlay \
     --mode track --frames-dir /app/frames \
     --tracks-json /app/tracks.json \
-    --out-dir /app/preview_tracks \
+    --output-dir /app/preview_tracks \
     --export-mp4 /app/preview_tracks.mp4 --fps 25 \
-    --draw-court --roi-json /app/court.json
+    --draw-court --draw-court-lines --roi-json /app/court.json
 ```
 
 Саніті-метрики (скільки унікальних гравців, частка кадрів з м’ячем, середня довжина треку м’яча):
@@ -310,7 +311,7 @@ docker run --rm -v "$(pwd)":/app decoder-track:latest \
   docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
     -m src.draw_overlay --only-court --roi-json /app/court.json \
     --frames-dir /app/frames --detections-json /app/detections.json \
-    --out-dir /app/preview_court
+    --output-dir /app/preview_court
   ```
 
 * ``tabulate``
@@ -763,57 +764,14 @@ The command prints the detections as JSON and saves the annotated image to
 - **Missing weights** – Download the official YOLOX checkpoints and place them
   in the ``weights`` directory, e.g. ``weights/yolox_x.pth``.
 
-## 4. Visualization (decoder-draw)
-
-Render bounding boxes for detection or tracking results.
+To render overlays, use the tracking image:
 
 ```bash
-# 1) Build the image
-make draw
-
-# 2a) Visualise detections
-make draw-run-detect
-
-# 2b) Visualise tracks with IDs
-make draw-run-track
-
-# 2c) Assemble frames into MP4
-make draw-run-mp4
-
-# Show CLI help
-docker run --rm -v "$(pwd)":/app decoder-draw:latest --help
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay --help
 ```
 
-The CLI reads frame images and one of `detections.json` or `tracks.json`.
-Two JSON schemas are accepted:
-
-* Nested per-frame: `[{"frame": "frame_000123.png", "detections": [{"bbox": [x1,y1,x2,y2], "class": <int|str>, "score": float}]}]`
-* Flat list: `[{"frame": "frame_000123.png", "bbox": [...], "class": ..., "score": ..., "track_id": int?}]`
-
-Supported keys: `frame`, `bbox`, `class`, `score`, `track_id`.
-Default class mapping: `0: person`, `32: sports ball`.
-Filter classes via `--only-class`, e.g. `--only-class person,sports ball`.
-
-Notes on reliability:
-
-* Falls back to Pillow if `cv2.imread` fails.
-* Bounding boxes are clipped to frame boundaries.
-* Output frames are sorted lexicographically before MP4 export.
-* MP4 export uses ffmpeg **image2** demuxer with a staged numeric sequence for deterministic order.
-* Frame names like `frame_%06d.png` are expected when resolving by index.
-
-Pipeline usage:
-
-```
-detect -> detections.json
-track  -> tracks.json
-draw   -> overlays in out/frames_viz and optional MP4
-```
-
-Image name: `decoder-draw:latest` (CPU only). Mount the repository as `/app`.
-Includes `loguru` (>=0.7.0) for logging.
-Parameters: run `docker run --rm -v "$(pwd)":/app decoder-draw:latest --help`.
-Modes: `--mode auto|detect|track` (default `auto` picks `track` if `--tracks-json` exists, otherwise `detect`).
+Logging: loguru (>=0.7.0)
 
 ## Court Detection
 
@@ -827,12 +785,15 @@ Purpose: detect the tennis court polygon for each input frame.
 docker build -t decoder-court:latest -f Dockerfile.court .
 
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir /app/frames --output-json /app/court.json
+  --frames-dir /app/frames --output-json /app/court.json \
+  --weights /app/weights/tcd.pth
 ```
 
 - Mount `/app` to access frames and outputs
 - GPU not required
 - Includes `loguru` (>=0.7.0) for logging
+- Provide `--weights /app/weights/tcd.pth`; without weights, add `--allow-placeholder` to emit a full-frame placeholder
+  (real geometry is recommended for gating and line rendering)
 
 ### Parameters
 
@@ -840,18 +801,30 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | ------ | ----------- | ------- |
 | `--frames-dir` | Input directory with frame images | **required** |
 | `--output-json` | Output file for court polygons | **required** |
+| `--weights` | Path to `TennisCourtDetector` weights (e.g. `/app/weights/tcd.pth`) | _none_ |
+| `--sample-rate` | Process every Nth frame and interpolate between | `5` |
+| `--stabilize` | `ema` or `median` coordinate smoothing | `ema` |
+| `--allow-placeholder` | Emit full-frame placeholder when detection fails | `false` |
 | `--help` | Show CLI help | - |
 
-The output `court.json` has one entry per frame:
+The output `court.json` has one entry per frame with optional lines and
+homography:
 
 ```json
 [
-  {"frame": "frame_000001.png", "class": 100, "polygon": [[0,0],[639,0],[639,359],[0,359]]}
+  {
+    "frame": "frame_000001.png",
+    "polygon": [[0,0],[639,0],[639,359],[0,359]],
+    "lines": {"service_center": [[319,0],[319,359]]},
+    "homography": [[1,0,0],[0,1,0],[0,0,1]],
+    "score": 0.92,
+    "placeholder": false
+  }
 ]
 ```
-Court detections are always stored with `class=100`. Downstream detection and
-tracking stages rely on this mapping. If the court is not detected for a frame,
-the entry is simply omitted; it should never appear with a null class value.
+Frames without a confident detection are omitted unless
+`--allow-placeholder` is enabled, in which case a full-frame polygon with
+`"placeholder": true` is returned.
 
 ## Пайплан на перевірку (копіпаст і вперед)
 
@@ -865,7 +838,8 @@ DOCKER_BUILDKIT=1 docker build -f Dockerfile.track  -t decoder-track:latest .
 
 # 1) court
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir /app/frames --output-json /app/court.json
+  --frames-dir /app/frames --output-json /app/court.json \
+  --weights /app/weights/tcd.pth --sample-rate 5 --stabilize ema
 
 # 2) detect
 docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
@@ -893,9 +867,9 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
     --mode track \
     --frames-dir /app/frames \
     --tracks-json /app/tracks.json \
-    --out-dir /app/preview_tracks \
+    --output-dir /app/preview_tracks \
     --export-mp4 /app/preview_tracks.mp4 --fps 25 \
-    --draw-court --roi-json /app/court.json
+    --draw-court --draw-court-lines --roi-json /app/court.json
 
 # 5) sanity metrics
 docker run --rm -v "$(pwd)":/app decoder-track:latest \

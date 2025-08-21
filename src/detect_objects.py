@@ -232,19 +232,32 @@ def _filter_by_roi(
     ``keep_outside`` is ``True``.
     """
 
-    from shapely.geometry import Point  # type: ignore
+    try:  # pragma: no cover - shapely optional
+        from shapely.geometry import Point  # type: ignore
 
-    minx, miny, maxx, maxy = polygon.bounds
-    bbox_area = (maxx - minx) * (maxy - miny)
-    if (
-        abs(polygon.area - bbox_area) < 1e-3
-        and minx <= 1
-        and miny <= 1
-        and (maxx >= 1000 or maxy >= 1000)
-    ):
-        return detections  # tennis tuning: full-frame polygon
+        expanded = polygon.buffer(margin)
 
-    expanded = polygon.buffer(margin)
+        def _contains(cx: float, cy: float) -> bool:
+            return expanded.contains(Point(cx, cy))
+
+        minx, miny, maxx, maxy = polygon.bounds
+        bbox_area = (maxx - minx) * (maxy - miny)
+        if (
+            abs(polygon.area - bbox_area) < 1e-3
+            and minx <= 1
+            and miny <= 1
+            and (maxx >= 1000 or maxy >= 1000)
+        ):
+            return detections  # tennis tuning: full-frame polygon
+    except Exception:  # pragma: no cover - simple fallback
+        coords = list(getattr(polygon, "exterior").coords)
+        xs = [p[0] for p in coords]
+        ys = [p[1] for p in coords]
+        minx, maxx = min(xs) - margin, max(xs) + margin
+        miny, maxy = min(ys) - margin, max(ys) + margin
+
+        def _contains(cx: float, cy: float) -> bool:
+            return minx <= cx <= maxx and miny <= cy <= maxy
     out: List[dict] = []
     for entry in detections:
         kept: List[dict] = []
@@ -255,7 +268,7 @@ def _filter_by_roi(
             x0, y0, x1, y1 = bbox
             cx = (x0 + x1) / 2.0
             cy = (y0 + y1) / 2.0
-            inside = expanded.contains(Point(cx, cy))
+            inside = _contains(cx, cy)
             if inside or keep_outside:
                 kept.append(det)
         out.append({"frame": entry.get("frame"), "detections": kept})
@@ -284,10 +297,7 @@ def _log_summary(entries: List[dict]) -> None:
                     ball_interp += 1
     frac = (ball_interp / ball_total) * 100.0 if ball_total else 0.0
     logger.info(
-        "summary: {} frames with players, {} frames with ball, {:.1f}% ball interpolated",
-        frames_with_person,
-        frames_with_ball,
-        frac,
+        f"summary: {frames_with_person} frames with players, {frames_with_ball} frames with ball, {frac:.1f}% ball interpolated"
     )  # tennis tuning
 
 
@@ -1503,6 +1513,12 @@ def main(argv: Iterable[str] | None = None) -> None:
             )
         try:
             from .track_objects import track_detections as _track
+
+            if args.pre_court_gate:
+                logger.info(
+                    "pre-court-gate activates only when a valid court polygon is available; "
+                    "placeholder or absent court disables the gate",
+                )
 
             _track(
                 args.detections_json,

@@ -192,32 +192,38 @@ def _load_tracks(json_path: Path) -> Dict[str, List[dict]]:
 
 
 # tennis tuning: tolerant ROI loader (dict or list)
-def _load_roi_poly(path: Path) -> "Polygon":
-    """Load a court ROI polygon from JSON file.
+def _load_roi(path: Path) -> Tuple["Polygon", Dict[str, List[List[float]]]]:
+    """Load a court ROI polygon and optional lines from JSON file.
 
     Accepts:
-      - dict with 'polygon' or 'roi' keys
+      - dict with 'polygon'/'roi' and optional 'lines'
       - list of dicts with per-frame polygons; takes the first available polygon
     """
 
     with path.open() as fh:
         data = json.load(fh)
 
+    lines: Dict[str, List[List[float]]] = {}
+    pts: List[List[float]] | None = None
+
     if isinstance(data, dict):
         pts = data.get("polygon") or data.get("roi")
-        if not pts:
-            raise ValueError("ROI JSON must contain 'polygon' or 'roi'")
-        return Polygon(pts)
-
-    if isinstance(data, list):
+        lines = data.get("lines") or {}
+    elif isinstance(data, list):
         for item in data:
             if isinstance(item, dict):
-                pts = item.get("polygon") or item.get("roi")
-                if pts:
-                    return Polygon(pts)
-        raise ValueError("ROI list JSON has no entries with 'polygon'/'roi'")
+                cand = item.get("polygon") or item.get("roi")
+                if cand:
+                    pts = cand
+                    lines = item.get("lines") or {}
+                    break
+    else:
+        raise TypeError("ROI JSON must be a dict or a list")
 
-    raise TypeError("ROI JSON must be a dict or a list")
+    if not pts:
+        raise ValueError("ROI JSON missing 'polygon'/'roi'")
+
+    return Polygon(pts), lines
 
 
 def _resolve_frame_path(
@@ -301,7 +307,9 @@ def _draw_overlay(
     max_frames: int,
     mode: str,
     draw_court: bool,
+    draw_court_lines: bool,
     roi_poly: Polygon | None,
+    roi_lines: Dict[str, List[List[float]]] | None,
     only_court: bool,
     primary_map: Dict[int, int],
 ) -> int:
@@ -343,6 +351,14 @@ def _draw_overlay(
                         [[int(x), int(y)] for x, y in det["polygon"]], dtype=np.int32
                     )
                     cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
+                    if draw_court_lines and det.get("lines"):
+                        for line in det["lines"].values():
+                            lpts = np.array(
+                                [[int(x), int(y)] for x, y in line], dtype=np.int32
+                            )
+                            cv2.polylines(
+                                img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
+                            )
                     break
             _imwrite(output_dir / path.name, img)
             written += 1
@@ -352,6 +368,14 @@ def _draw_overlay(
                 [[int(x), int(y)] for x, y in roi_poly.exterior.coords], dtype=np.int32
             )
             cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
+            if draw_court_lines and roi_lines:
+                for line in roi_lines.values():
+                    lpts = np.array(
+                        [[int(x), int(y)] for x, y in line], dtype=np.int32
+                    )
+                    cv2.polylines(
+                        img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
+                    )
             if only_court:
                 _imwrite(output_dir / path.name, img)
                 written += 1
@@ -363,6 +387,14 @@ def _draw_overlay(
                         [[int(x), int(y)] for x, y in det["polygon"]], dtype=np.int32
                     )
                     cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
+                if draw_court_lines and det.get("lines"):
+                    for line in det["lines"].values():
+                        lpts = np.array(
+                            [[int(x), int(y)] for x, y in line], dtype=np.int32
+                        )
+                        cv2.polylines(
+                            img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
+                        )
                 continue
             score = float(det.get("score", 0.0))
             if score < confidence_thr:
@@ -517,6 +549,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         help="Draw tennis court polygon",
     )
     parser.add_argument(
+        "--draw-court-lines",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Draw internal court lines when available",
+    )
+    parser.add_argument(
         "--confidence-thr", type=float, default=0.0, help="Minimum score threshold"
     )
     parser.add_argument(
@@ -604,8 +642,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     allowed_names, allowed_ids = _parse_class_filter(args.only_class)
 
     roi_poly: Optional[Polygon] = None
+    roi_lines: Optional[Dict[str, List[List[float]]]] = None
     if args.roi_json:
-        roi_poly = _load_roi_poly(args.roi_json)  # tennis tuning
+        roi_poly, roi_lines = _load_roi(args.roi_json)  # tennis tuning
 
     primary_map: Dict[int, int] = {}
     if mode == "track" and args.primary_id_stick > 0:
@@ -641,7 +680,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.max_frames,
         mode,
         args.draw_court,
+        args.draw_court_lines,
         roi_poly,
+        roi_lines,
         args.only_court,
         primary_map,
     )
