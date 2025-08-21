@@ -26,6 +26,7 @@ cv2_dummy.imread = lambda *a, **k: None
 cv2_dummy.imwrite = lambda *a, **k: True
 cv2_dummy.rectangle = lambda *a, **k: None
 cv2_dummy.putText = lambda *a, **k: None
+cv2_dummy.polylines = lambda *a, **k: None
 cv2_dummy.FONT_HERSHEY_SIMPLEX = 0
 cv2_dummy.LINE_AA = 16
 sys.modules.setdefault('cv2', cv2_dummy)

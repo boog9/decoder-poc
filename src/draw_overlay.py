@@ -75,6 +75,19 @@ def _track_color(track_id: Optional[int]) -> Tuple[int, int, int]:
     return _hash_color(str(track_id))
 
 
+def _roi_is_frame(poly: "Polygon") -> bool:
+    """Return True if ``poly`` spans the entire frame."""  # tennis tuning
+
+    minx, miny, maxx, maxy = poly.bounds
+    area = (maxx - minx) * (maxy - miny)
+    return (
+        abs(poly.area - area) < 1e-3
+        and minx <= 1
+        and miny <= 1
+        and (maxx >= 1000 or maxy >= 1000)
+    )
+
+
 def _load_class_map(path: Path) -> Dict[int, str]:
     """Load a mapping of class IDs to names from JSON or YAML."""
 
@@ -295,6 +308,26 @@ def _draw_overlay(
             LOGGER.warning("Failed to read %s", path)
             continue
         h, w = img.shape[:2]
+        if only_court and (roi_poly is None or _roi_is_frame(roi_poly)):
+            for det in dets:
+                if det.get("class") == COURT_CLASS_ID and det.get("polygon") and draw_court:
+                    pts = np.array(
+                        [[int(x), int(y)] for x, y in det["polygon"]], dtype=np.int32
+                    )
+                    cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
+                    break
+            _imwrite(output_dir / path.name, img)
+            written += 1
+            continue  # tennis tuning
+        if draw_court and roi_poly is not None and not _roi_is_frame(roi_poly):
+            pts = np.array(
+                [[int(x), int(y)] for x, y in roi_poly.exterior.coords], dtype=np.int32
+            )
+            cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
+            if only_court:
+                _imwrite(output_dir / path.name, img)
+                written += 1
+                continue  # tennis tuning
         for det in dets:
             if det.get("class") == COURT_CLASS_ID and det.get("polygon"):
                 if draw_court:
@@ -329,13 +362,6 @@ def _draw_overlay(
             if x2 <= x1 or y2 <= y1:
                 LOGGER.warning("Degenerate bbox for frame %s", path.name)
                 continue
-            if roi_poly is not None and only_court:
-                from shapely.geometry import Point  # type: ignore
-
-                cx = (x1 + x2) / 2.0
-                cy = (y1 + y2) / 2.0
-                if not roi_poly.contains(Point(cx, cy)):
-                    continue
             disp_tid: Optional[int] = None
             if mode == "track":
                 tid = det.get("track_id")
@@ -493,7 +519,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--only-court",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Draw only tracks inside ROI",
+        help="Draw only the court contour",  # tennis tuning
     )
     parser.add_argument(
         "--primary-id-stick",

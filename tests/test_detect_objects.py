@@ -86,8 +86,9 @@ def test_parse_args_defaults() -> None:
     assert args.two_pass is True
     assert args.person_conf == 0.55
     assert args.person_img_size == 1280
-    assert args.ball_conf == 0.15
-    assert args.ball_img_size == 1536
+    assert args.ball_conf == 0.10
+    assert args.ball_img_size == 1280
+    assert args.ball_interp_gap_max == 5
     assert args.save_splits is False
 
 

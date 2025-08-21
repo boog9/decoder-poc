@@ -32,13 +32,15 @@ def _center(bbox: List[float]) -> tuple[float, float]:
     return (x0 + x1) / 2.0, (y0 + y1) / 2.0
 
 
-def link_ball_detections(entries: List[dict]) -> None:
+def link_ball_detections(entries: List[dict], gap_max: int = 5) -> None:
     """In-place interpolation of missing ball detections.
 
     Parameters
     ----------
     entries:
         Detection results in nested format ``[{"frame": str, "detections": [...]}, ...]``.
+    gap_max:
+        Maximum gap in frames to interpolate.  # tennis tuning
     """
 
     balls: List[tuple[int, dict]] = []
@@ -55,7 +57,7 @@ def link_ball_detections(entries: List[dict]) -> None:
         f0, d0 = balls[idx - 1]
         f1, d1 = balls[idx]
         gap = f1 - f0
-        if 1 < gap <= 3:
+        if 1 < gap <= gap_max:  # tennis tuning
             c0 = _center(d0["bbox"])
             c1 = _center(d1["bbox"])
             for step in range(1, gap):
@@ -78,6 +80,7 @@ def link_ball_detections(entries: List[dict]) -> None:
                 )
 
     # Remove stationary sequences (>5 frames with <1px movement)
+    # tennis tuning: filters scoreboard or lamp artifacts
     filtered: List[tuple[int, dict]] = []
     last_c = None
     stationary = 0

@@ -309,6 +309,27 @@ def _pre_min_area_quantile(detections: List[dict], q: float) -> float:
     return areas[lo] * (1 - weight) + areas[hi] * weight
 
 
+def _poly_is_full_frame(pts: List[List[float]]) -> bool:
+    """Return True if ``pts`` spans the entire frame."""  # tennis tuning
+
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    minx, miny, maxx, maxy = min(xs), min(ys), max(xs), max(ys)
+    area = (maxx - minx) * (maxy - miny)
+    poly_area = 0.0
+    for i in range(len(pts)):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % len(pts)]
+        poly_area += x1 * y2 - x2 * y1
+    poly_area = abs(poly_area) / 2.0
+    return (
+        abs(poly_area - area) < 1e-3
+        and minx <= 1
+        and miny <= 1
+        and (maxx >= 1000 or maxy >= 1000)
+    )
+
+
 def _pre_nms_persons(frame_dets: List[dict], iou_thr: float = 0.6) -> List[dict]:
     """Apply greedy NMS to person detections."""
 
@@ -611,6 +632,7 @@ def track_detections(
     pre_min_area_q: float = 0.0,
     pre_topk: int = 0,
     pre_court_gate: bool = False,
+    half_court_gate: bool = False,
     court_json: Path | None = None,
     stitch: bool = False,
     stitch_iou: float = 0.55,
@@ -645,8 +667,17 @@ def track_detections(
     else:
         court_map = _extract_court_map(raw)
 
+    court_mid_y = None
     total_frames = len(frames)
     poly_frames = len(court_map)
+    if court_map:
+        first_poly = next(iter(court_map.values()))
+        if _poly_is_full_frame(first_poly):
+            court_map = {}  # tennis tuning: ignore full-frame polygons
+            poly_frames = 0
+        else:
+            ys = [p[1] for p in first_poly]
+            court_mid_y = (min(ys) + max(ys)) / 2.0  # tennis tuning
     if pre_court_gate:
         if poly_frames > 0:
             logger.info(
@@ -657,6 +688,7 @@ def track_detections(
             )
         else:
             logger.warning("pre-court-gate enabled but no court polygons available")
+            pre_court_gate = False
 
     min_area = 0.0
     if pre_min_area_q > 0:
@@ -755,6 +787,30 @@ def track_detections(
                         * (d["bbox"][3] - d["bbox"][1])
                         >= min_area
                     ]
+                if half_court_gate and court_mid_y is not None and active[cls_id]:
+                    for det in dets:
+                        cx = (det["bbox"][0] + det["bbox"][2]) / 2.0
+                        cy = (det["bbox"][1] + det["bbox"][3]) / 2.0
+                        side_det = cy > court_mid_y
+                        for bbox, _ in active[cls_id].values():
+                            cx2 = bbox[0] + bbox[2] / 2.0
+                            cy2 = bbox[1] + bbox[3] / 2.0
+                            side_tr = cy2 > court_mid_y
+                            if side_det != side_tr:
+                                x0 = max(det["bbox"][0], bbox[0])
+                                y0 = max(det["bbox"][1], bbox[1])
+                                x1 = min(det["bbox"][2], bbox[0] + bbox[2])
+                                y1 = min(det["bbox"][3], bbox[1] + bbox[3])
+                                if x1 > x0 and y1 > y0:
+                                    inter = (x1 - x0) * (y1 - y0)
+                                    area_det = (det["bbox"][2] - det["bbox"][0]) * (
+                                        det["bbox"][3] - det["bbox"][1]
+                                    )
+                                    area_tr = bbox[2] * bbox[3]
+                                    iou = inter / (area_det + area_tr - inter + 1e-9)
+                                    if iou > 0.1:
+                                        det["score"] *= 0.5  # tennis tuning
+                                        break
                 if n_start and frame_id % 30 == 0:
                     removed = n_start - len(dets)
                     logger.debug(

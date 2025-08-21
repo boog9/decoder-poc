@@ -40,7 +40,8 @@ import numpy as np
 
 from loguru import logger
 
-from .utils.classes import CLASS_ID_TO_NAME, CLASS_NAME_TO_ID
+# tennis tuning hotfix: class maps for summaries
+from .utils.classes import CLASS_NAME_TO_ID, CLASS_ID_TO_NAME
 
 COURT_CLASS_ID = CLASS_NAME_TO_ID["tennis_court"]
 
@@ -211,6 +212,16 @@ def _filter_by_roi(
 
     from shapely.geometry import Point  # type: ignore
 
+    minx, miny, maxx, maxy = polygon.bounds
+    bbox_area = (maxx - minx) * (maxy - miny)
+    if (
+        abs(polygon.area - bbox_area) < 1e-3
+        and minx <= 1
+        and miny <= 1
+        and (maxx >= 1000 or maxy >= 1000)
+    ):
+        return detections  # tennis tuning: full-frame polygon
+
     expanded = polygon.buffer(margin)
     out: List[dict] = []
     for entry in detections:
@@ -227,6 +238,35 @@ def _filter_by_roi(
                 kept.append(det)
         out.append({"frame": entry.get("frame"), "detections": kept})
     return out
+
+
+def _log_summary(entries: List[dict]) -> None:
+    """Log detection summary by class."""  # tennis tuning
+
+    ball_id = CLASS_NAME_TO_ID.get("sports ball")
+    person_id = CLASS_NAME_TO_ID.get("person")
+    frames_with_ball = 0
+    frames_with_person = 0
+    ball_total = 0
+    ball_interp = 0
+    for frame in entries:
+        dets = frame.get("detections", [])
+        has_ball = any(d.get("class") == ball_id for d in dets)
+        has_person = any(d.get("class") == person_id for d in dets)
+        frames_with_ball += int(has_ball)
+        frames_with_person += int(has_person)
+        for d in dets:
+            if d.get("class") == ball_id:
+                ball_total += 1
+                if d.get("interpolated"):
+                    ball_interp += 1
+    frac = (ball_interp / ball_total) * 100.0 if ball_total else 0.0
+    logger.info(
+        "summary: %d frames with players, %d frames with ball, %.1f%% ball interpolated",
+        frames_with_person,
+        frames_with_ball,
+        frac,
+    )  # tennis tuning
 
 
 def _get_tlwh_from_track(track: Any) -> Tuple[float, float, float, float]:
@@ -292,21 +332,21 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     det.add_argument("--conf-thres", type=float, default=0.3)
     det.add_argument("--nms-thres", type=float, default=0.45)
     det.add_argument("--classes", nargs="+", type=int, default=None)
-    det.add_argument("--two-pass", action=argparse.BooleanOptionalAction, default=True)
-    det.add_argument("--person-conf", "--conf-person", type=float, default=0.55)
-    det.add_argument("--ball-conf", "--conf-ball", type=float, default=0.15)
+    det.add_argument("--two-pass", action=argparse.BooleanOptionalAction, default=True)  # tennis tuning
+    det.add_argument("--person-conf", "--conf-person", type=float, default=0.55)  # tennis tuning
+    det.add_argument("--ball-conf", "--conf-ball", type=float, default=0.10)  # tennis tuning
     det.add_argument("--person-nms", type=float, default=0.45)
-    det.add_argument("--person-img-size", type=int, default=1280)
+    det.add_argument("--person-img-size", type=int, default=1280)  # tennis tuning
     det.add_argument("--person-classes", nargs="+", default=["person"])
     det.add_argument("--ball-nms", type=float, default=0.30)
-    det.add_argument("--ball-img-size", type=int, default=1536)
+    det.add_argument("--ball-img-size", type=int, default=1280)  # tennis tuning
     det.add_argument("--ball-classes", nargs="+", default=["sports ball"])
     det.add_argument(
         "--nms-class-aware",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Apply NMS per class (default)",
-    )
+    )  # tennis tuning
     det.add_argument(
         "--detect-court",
         action=argparse.BooleanOptionalAction,
@@ -325,8 +365,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=False,
     )
     det.add_argument("--court-weights", type=Path, default=None)
-    det.add_argument("--roi-json", type=Path, default=None)
-    det.add_argument("--roi-margin", type=float, default=8.0)
+    det.add_argument("--roi-json", type=Path, default=None)  # tennis tuning
+    det.add_argument("--roi-margin", type=float, default=8.0)  # tennis tuning
     det.add_argument(
         "--keep-outside-roi",
         action=argparse.BooleanOptionalAction,
@@ -338,6 +378,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Interpolate short gaps in ball detections",
+    )  # tennis tuning
+    det.add_argument(
+        "--ball-interp-gap-max",
+        type=int,
+        default=5,
+        help="Maximum gap for ball interpolation",  # tennis tuning
     )
     det.add_argument("--save-splits", action="store_true")
 
@@ -362,40 +408,46 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument(
         "--reid-reuse-window",
         type=int,
-        default=125,
+        default=150,
         help="Frames to keep vanished IDs for short-term reuse",
-    )
+    )  # tennis tuning
     # Pre-filters
     tr.add_argument(
         "--pre-nms-iou",
         type=float,
-        default=0.0,
+        default=0.60,
         help="Greedy NMS IoU for person detections; 0 disables",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--pre-min-area-q",
         type=float,
-        default=0.0,
+        default=0.15,
         help="Quantile for minimum person box area; 0 disables",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--pre-topk",
         type=int,
-        default=0,
+        default=3,
         help="Keep only top-K person detections per frame",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--pre-court-gate",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Drop persons whose centre lies outside the court polygon",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--court-json",
         type=Path,
         default=None,
         help="Optional court polygon JSON; falls back to detections",
     )
+    tr.add_argument(
+        "--half-court-gate",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Down-weight player associations across court halves",
+    )  # tennis tuning
     # Person tracker params
     tr.add_argument(
         "--p-track-thresh",
@@ -412,15 +464,15 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument(
         "--p-match-thresh",
         type=float,
-        default=0.60,
+        default=0.55,
         help="IoU match threshold for person tracker",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--p-track-buffer",
         type=int,
-        default=125,
+        default=160,
         help="Frames to keep lost person tracks",
-    )
+    )  # tennis tuning
     # Ball tracker params
     tr.add_argument(
         "--b-track-thresh",
@@ -437,15 +489,15 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument(
         "--b-match-thresh",
         type=float,
-        default=0.85,
+        default=0.55,
         help="IoU match threshold for ball tracker",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--b-track-buffer",
         type=int,
-        default=90,
+        default=150,
         help="Frames to keep lost ball tracks",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--b-min-box-area",
         type=float,
@@ -460,20 +512,23 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     # Post-process
     tr.add_argument(
-        "--stitch", action="store_true", default=False, help="Enable predictive ID stitching"
-    )
+        "--stitch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable predictive ID stitching",
+    )  # tennis tuning
     tr.add_argument(
         "--stitch-iou", type=float, default=0.55, help="IoU threshold for stitching"
     )
     tr.add_argument(
-        "--stitch-gap", type=int, default=5, help="Maximum gap in frames for stitching"
-    )
+        "--stitch-gap", type=int, default=12, help="Maximum gap in frames for stitching"
+    )  # tennis tuning
     tr.add_argument(
         "--stitch-speed",
         type=float,
-        default=50.0,
+        default=40.0,
         help="Maximum centre speed between fragments",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--stitch-aspect-tol",
         type=float,
@@ -483,15 +538,15 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument(
         "--stitch-scale-tol",
         type=float,
-        default=0.35,
+        default=0.50,
         help="Allowed scale change when stitching",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--smooth",
         choices=["none", "ema", "sg"],
-        default="none",
+        default="ema",
         help="Trajectory smoothing method",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--smooth-alpha", type=float, default=0.3, help="EMA smoothing factor"
     )
@@ -500,10 +555,10 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     tr.add_argument(
         "--appearance-refine",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Refine IDs using HSV colour histograms",
-    )
+    )  # tennis tuning
     tr.add_argument(
         "--appearance-lambda",
         type=float,
@@ -902,6 +957,7 @@ def detect_two_pass(
     roi_margin: float = 8.0,
     keep_outside_roi: bool = False,
     prelink_ball: bool = True,
+    ball_interp_gap_max: int = 5,
     detect_court: bool = True,
     court_device: str = "auto",
     court_use_homography: bool = False,
@@ -946,7 +1002,7 @@ def detect_two_pass(
     if prelink_ball:
         from .ball_temporal_link import link_ball_detections
 
-        link_ball_detections(merged)
+        link_ball_detections(merged, gap_max=ball_interp_gap_max)  # tennis tuning
     if detect_court:
         try:
             from .court_detector import detect_court as _detect_court
@@ -976,6 +1032,7 @@ def detect_two_pass(
     merged.sort(key=lambda e: _extract_frame_id(e.get("frame")))
     for e in merged:
         e["detections"].sort(key=lambda d: d.get("class", 0))
+    _log_summary(merged)  # tennis tuning
     if save_splits:
         save_json(det_person, out_json.with_name(out_json.stem + "_person.json"))
         save_json(det_ball, out_json.with_name(out_json.stem + "_ball.json"))
@@ -995,6 +1052,7 @@ def detect_folder(
     roi_margin: float = 8.0,
     keep_outside_roi: bool = False,
     prelink_ball: bool = True,
+    ball_interp_gap_max: int = 5,
     detect_court: bool = True,
     court_device: str = "auto",
     court_use_homography: bool = False,
@@ -1113,7 +1171,7 @@ def detect_folder(
     if prelink_ball:
         from .ball_temporal_link import link_ball_detections
 
-        link_ball_detections(out)
+        link_ball_detections(out, gap_max=ball_interp_gap_max)  # tennis tuning
     if detect_court:
         try:
             from .court_detector import detect_court as _detect_court
@@ -1143,6 +1201,7 @@ def detect_folder(
     out.sort(key=lambda e: _extract_frame_id(e.get("frame")))
     for e in out:
         e["detections"].sort(key=lambda d: d.get("class", 0))
+    _log_summary(out)  # tennis tuning
     save_json(out, out_json)
 
 
@@ -1395,6 +1454,10 @@ def main(argv: Iterable[str] | None = None) -> None:
     """CLI entrypoint."""
 
     args = parse_args(argv)
+    if getattr(args, "cmd", None) in (None, "detect"):
+        default_court = Path.cwd() / "court.json"
+        if args.roi_json is None and default_court.exists():
+            args.roi_json = default_court  # tennis tuning
 
     if getattr(args, "cmd", None) in (None, "detect") and _is_track_container():
         logger.warning(
@@ -1408,6 +1471,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         )
 
     if args.cmd == "track":
+        if args.appearance_refine is None and args.frames_dir is not None:
+            args.appearance_refine = True  # tennis tuning
+        elif args.appearance_refine is None:
+            args.appearance_refine = False
         if args.appearance_refine and args.frames_dir is None:
             logger.warning(
                 "--appearance-refine requested but --frames-dir missing; skipping"
@@ -1435,6 +1502,7 @@ def main(argv: Iterable[str] | None = None) -> None:
                 args.pre_min_area_q,
                 args.pre_topk,
                 args.pre_court_gate,
+                args.half_court_gate,
                 args.court_json,
                 args.stitch,
                 args.stitch_iou,
@@ -1473,6 +1541,7 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.roi_margin,
                     args.keep_outside_roi,
                     args.prelink_ball,
+                    args.ball_interp_gap_max,
                     args.detect_court,
                     args.court_device,
                     args.court_use_homography,
@@ -1493,6 +1562,7 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.roi_margin,
                     args.keep_outside_roi,
                     args.prelink_ball,
+                    args.ball_interp_gap_max,
                     args.detect_court,
                     args.court_device,
                     args.court_use_homography,
