@@ -185,15 +185,37 @@ def _normalize_bbox(b) -> list[float] | None:
 
 
 def _load_roi(path: Path) -> Polygon:
-    """Load court ROI polygon from ``path``."""
+    """Load ROI polygon from JSON.
+
+    Accepts:
+      - dict with key 'polygon' or 'roi'
+      - list of dicts each having 'polygon' (e.g., court.json per-frame output);
+        in this case we take the first available polygon.
+    """
+
     from shapely.geometry import Polygon  # type: ignore
 
     with path.open() as fh:
         data = json.load(fh)
-    pts = data.get("polygon") or data.get("roi")
-    if not pts:
-        raise ValueError("ROI JSON must contain 'polygon' or 'roi' key")
-    return Polygon(pts)
+
+    # case 1: single polygon dict
+    if isinstance(data, dict):
+        pts = data.get("polygon") or data.get("roi")
+        if not pts:
+            raise ValueError("ROI JSON must contain 'polygon' or 'roi' key")
+        return Polygon(pts)
+
+    # case 2: list of per-frame entries (court.json style)
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            pts = item.get("polygon") or item.get("roi")
+            if pts:
+                return Polygon(pts)
+        raise ValueError("ROI list JSON has no entries with 'polygon'/'roi'")
+
+    raise TypeError("ROI JSON must be dict or list")
 
 
 def _filter_by_roi(
