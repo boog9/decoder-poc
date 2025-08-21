@@ -43,6 +43,14 @@ class DummyPolygon:
     def contains(self, point: DummyPoint) -> bool:
         return self.x0 <= point.x <= self.x1 and self.y0 <= point.y <= self.y1
 
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        return self.x0, self.y0, self.x1, self.y1
+
+    @property
+    def area(self) -> float:
+        return (self.x1 - self.x0) * (self.y1 - self.y0)
+
 
 geometry = types.SimpleNamespace(Polygon=DummyPolygon, Point=DummyPoint)
 shapely_stub = types.SimpleNamespace(geometry=geometry)

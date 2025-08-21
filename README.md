@@ -138,9 +138,18 @@ python -m src.draw_overlay \
 
 Use `--draw-court=false` to hide the court polygon.
 
+- `--only-court`: Draw only the court contour without boxes or IDs.
 - `--palette-seed`: Stabilise the colour palette globally.
 - `--class-map`: Optional JSON/YAML mapping of class IDs to names.
 - `--confidence-thr`: Filter detections below this score.
+
+Example rendering only the court outline:
+
+```bash
+python -m src.draw_overlay \
+  --frames-dir frames --detections-json detections.json \
+  --out-dir preview_court --only-court --roi-json court.json
+```
 
 The legacy `src.draw_tracks` module is kept for backwards compatibility and
 forwards all arguments to `src.draw_overlay --mode track`.
@@ -158,6 +167,38 @@ Install the following packages to run detection:
 * ``torch`` (with CUDA support)
 * ``opencv-python-headless``
 * ``loguru``
+
+## Tennis defaults (YOLOX + ByteTrack)
+
+Example pipeline with tuned defaults for tennis tracking:
+
+```bash
+# 1) court detection
+docker run --rm -v $(pwd):/app decoder-court:latest \
+  --frames-dir /app/frames --output-json /app/court.json
+
+# 2) detect – class-aware NMS, ROI gate, ball interpolation up to 5 frames
+docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+  detect --frames-dir /app/frames \
+         --output-json /app/detections.json \
+         --two-pass --nms-class-aware \
+         --roi-json /app/court.json --roi-margin 8 \
+         --detect-court
+
+# 3) track – softer thresholds, wider buffers, stitching & smoothing
+docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+  track --detections-json /app/detections.json \
+        --output-json /app/tracks.json \
+        --fps 30 --min-score 0.28 \
+        --pre-nms-iou 0.6 --pre-min-area-q 0.15 --pre-topk 3 --pre-court-gate \
+        --p-match-thresh 0.55 --p-track-buffer 160 --reid-reuse-window 150 \
+        --b-match-thresh 0.55 --b-track-buffer 150 \
+        --stitch --stitch-iou 0.55 --stitch-gap 12 \
+        --smooth ema --smooth-alpha 0.3
+```
+
+Lower ``b-match-thresh`` with higher ``b-track-buffer`` stabilises the ball ID. For players, reducing ``p-match-thresh`` and increasing ``p-track-buffer`` helps retain IDs near the net. ``pre-min-area-q=0.15`` keeps distant players, while ``stitch=*`` merges short gaps. ``appearance-refine`` activates automatically when ``--frames-dir`` is supplied.
+
 * ``tabulate``
 
 YOLOX 0.3+ is required and can be installed from GitHub or via the provided
