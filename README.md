@@ -152,17 +152,19 @@ Draw detection or tracking overlays on extracted frames. Colors are stable
 either per class or per track ID depending on the selected mode.
 
 ```bash
-python -m src.draw_overlay \
-    --frames-dir frames_min \
-    --tracks-json tracks.json \
-    --output-dir frames_tracks \
-    --mode track --label --id --draw-court
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --frames-dir /app/frames_min \
+  --tracks-json /app/tracks.json \
+  --output-dir /app/frames_tracks \
+  --mode track --label --id --draw-court
 
-python -m src.draw_overlay \
-    --frames-dir frames_min \
-    --detections-json detections.json \
-    --output-dir frames_det \
-    --mode class --label
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --frames-dir /app/frames_min \
+  --detections-json /app/detections.json \
+  --output-dir /app/frames_det \
+  --mode class --label
 ```
 
 Use `--draw-court=false` to hide the court polygon.
@@ -175,9 +177,10 @@ Use `--draw-court=false` to hide the court polygon.
 Example rendering only the court outline:
 
 ```bash
-python -m src.draw_overlay \
-  --frames-dir frames --detections-json detections.json \
-  --out-dir preview_court --only-court --roi-json court.json
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --frames-dir /app/frames --detections-json /app/detections.json \
+  --out-dir /app/preview_court --only-court --roi-json /app/court.json
 ```
 
 The legacy `src.draw_tracks` module is kept for backwards compatibility and
@@ -227,13 +230,19 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --stitch --stitch-iou 0.55 --stitch-gap 12 \
         --smooth ema --smooth-alpha 0.3
 ```
+> `pre-court-gate` is effective only if `court.json` contains a real court polygon. If
+> `decoder-court` still outputs a full-frame polygon (placeholder), either disable the gate (`--no-pre-court-gate`) or provide a valid `court.json`.
+
+If you see `pre-court-gate disabled: detected full-frame court polygon`, this is expected for placeholder polygons.
+
+
 ROI note: --roi-json приймає або один полігон { "polygon": [...] }, або court.json (список полігонів по кадрах). У випадку списку використовується полігон з першого кадру. Якщо камера рухома — краще не використовувати ROI на етапі Detect, а покладатися на --pre-court-gate у Track.
 
 ROI debug:
 
 ```bash
-# Перевірка контура корту з ROI:
-python -m src.draw_overlay --only-court --roi-json /app/court.json \
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay --only-court --roi-json /app/court.json \
   --frames-dir /app/frames --detections-json /app/detections.json \
   --out-dir /app/preview_court
 ```
@@ -247,7 +256,8 @@ Lower b-match-thresh + higher b-track-buffer стабілізують ID м’я
 
 ```bash
 # Tracks overlay to PNGs
-python -m src.draw_overlay \
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
   --mode track \
   --frames-dir /app/frames \
   --tracks-json /app/tracks.json \
@@ -255,7 +265,8 @@ python -m src.draw_overlay \
   --draw-court --roi-json /app/court.json
 
 # Optional MP4 export (25 fps)
-python -m src.draw_overlay \
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
   --mode track \
   --frames-dir /app/frames \
   --tracks-json /app/tracks.json \
@@ -266,8 +277,8 @@ python -m src.draw_overlay \
 Запускати можна всередині будь-якого образу, де є Python + OpenCV. Найпростіше — у decoder-track:latest з примонтованим репозиторієм:
 
 ```bash
-docker run --rm -v "$(pwd)":/app decoder-track:latest \
-  python -m src.draw_overlay \
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
     --mode track --frames-dir /app/frames \
     --tracks-json /app/tracks.json \
     --out-dir /app/preview_tracks \
@@ -294,9 +305,10 @@ docker run --rm -v "$(pwd)":/app decoder-track:latest \
 - М’яч часто втрачає ID: зменшіть --b-match-thresh (наприклад, до 0.5) і/або збільште --b-track-buffer (до 180).
 - Контур корту не видно: переконайтесь, що court.json містить реальний полігон, а не «рамку кадру». Для дебагу:
   ```bash
-  python -m src.draw_overlay --only-court --roi-json /app/court.json \
-         --frames-dir /app/frames --detections-json /app/detections.json \
-         --out-dir /app/preview_court
+  docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+    -m src.draw_overlay --only-court --roi-json /app/court.json \
+    --frames-dir /app/frames --detections-json /app/detections.json \
+    --out-dir /app/preview_court
   ```
 
 * ``tabulate``
@@ -710,9 +722,10 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
   --b-track-thresh 0.15 --b-high-thresh 0.30 --b-match-thresh 0.85 --b-track-buffer 90 \
   --b-min-box-area 4 --b-max-aspect-ratio 2.0
 
-python -m src.draw_overlay \
-  --frames-dir frames --tracks-json tracks.json \
-  --output-dir frames_tracks --mode track --label --id --only-court
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --frames-dir /app/frames --tracks-json /app/tracks.json \
+  --output-dir /app/frames_tracks --mode track --label --id --only-court
 ```
 
 ## Single Image Detection Demo
@@ -873,8 +886,8 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --smooth ema --smooth-alpha 0.3
 
 # 4) overlay preview (PNG + MP4)
-docker run --rm -v "$(pwd)":/app decoder-track:latest \
-  python -m src.draw_overlay \
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
     --mode track \
     --frames-dir /app/frames \
     --tracks-json /app/tracks.json \

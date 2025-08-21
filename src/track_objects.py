@@ -670,11 +670,14 @@ def track_detections(
     court_mid_y = None
     total_frames = len(frames)
     poly_frames = len(court_map)
+    disabled_full_frame = False
     if court_map:
         first_poly = next(iter(court_map.values()))
         if _poly_is_full_frame(first_poly):
             court_map = {}  # tennis tuning: ignore full-frame polygons
             poly_frames = 0
+            disabled_full_frame = True  # tennis tuning
+            pre_court_gate = False
         else:
             ys = [p[1] for p in first_poly]
             court_mid_y = (min(ys) + max(ys)) / 2.0  # tennis tuning
@@ -688,7 +691,12 @@ def track_detections(
             )
         else:
             logger.warning("pre-court-gate enabled but no court polygons available")
-            pre_court_gate = False
+    else:
+        if disabled_full_frame:
+            logger.info(
+                "pre-court-gate disabled: detected full-frame court polygon (placeholder); "
+                "provide a real court.json to enable gating"
+            )
 
     min_area = 0.0
     if pre_min_area_q > 0:
