@@ -284,7 +284,7 @@ def _log_summary(entries: List[dict]) -> None:
                     ball_interp += 1
     frac = (ball_interp / ball_total) * 100.0 if ball_total else 0.0
     logger.info(
-        "summary: %d frames with players, %d frames with ball, %.1f%% ball interpolated",
+        "summary: {} frames with players, {} frames with ball, {:.1f}% ball interpolated",
         frames_with_person,
         frames_with_ball,
         frac,
