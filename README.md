@@ -2,6 +2,8 @@
 
 This project contains experimental utilities for video processing. The `frame_extractor` CLI provides a simple way to extract video frames using FFmpeg.
 
+> All command-line interfaces should be executed in Docker containers. Running them locally is intended for developers only.
+
 ## Frame Extraction CLI
 
 ```
@@ -34,7 +36,17 @@ If the repository was cloned without ``--recursive`` run:
 git submodule update --init --recursive
 ```
 
-## Setup
+### Prerequisites (Docker)
+
+- Docker 24+ і NVIDIA Container Toolkit.
+- GPU має бути видимим у контейнері:
+  ```bash
+  docker run --gpus all --rm nvidia/cuda:12.2.0-base nvidia-smi
+  ```
+- У прикладах нижче завжди монтуємо репозиторій як /app:
+  `-v "$(pwd)":/app`
+
+## Setup (developers only)
 
 Install the system dependencies and Python packages, then fetch the
 ``ByteTrack`` submodule and verify the vendored tracker.
@@ -49,6 +61,23 @@ python -m pip install pytest
 bash build_externals.sh  # sanity-check ByteTrack vendor only
 make test
 ```
+
+### Build images
+
+Зберіть контейнер(и) один раз перед запуском пайплайна:
+
+```bash
+# Court detector
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.court  -t decoder-court:latest .
+
+# YOLOX detect
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest .
+
+# ByteTrack track
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.track  -t decoder-track:latest .
+```
+
+Якщо у вас є Makefile-цілі (make court, make detect, make track), можете використовувати їх — але приклади нижче припускають явні docker build.
 
 > **Note:** PyTorch is provided by the base image `pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime`.
 > Do not install or upgrade `torch` or `torchvision` via pip—this increases the image size
@@ -170,15 +199,15 @@ Install the following packages to run detection:
 
 ## Tennis defaults (YOLOX + ByteTrack)
 
-Example pipeline with tuned defaults for tennis tracking:
+End-to-end приклад з тюнінгами під теніс (Docker-first):
 
 ```bash
-# 1) court detection
-docker run --rm -v $(pwd):/app decoder-court:latest \
+# 1) court detection -> /app/court.json
+docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames --output-json /app/court.json
 
 # 2) detect – class-aware NMS, ROI gate, ball interpolation up to 5 frames
-docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
   detect --frames-dir /app/frames \
          --output-json /app/detections.json \
          --two-pass --nms-class-aware \
@@ -186,9 +215,11 @@ docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
          --detect-court
 
 # 3) track – softer thresholds, wider buffers, stitching & smoothing
-docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+# IMPORTANT: pass --frames-dir to auto-enable appearance refine
+docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
   track --detections-json /app/detections.json \
         --output-json /app/tracks.json \
+        --frames-dir /app/frames \
         --fps 30 --min-score 0.28 \
         --pre-nms-iou 0.6 --pre-min-area-q 0.15 --pre-topk 3 --pre-court-gate \
         --p-match-thresh 0.55 --p-track-buffer 160 --reid-reuse-window 150 \
@@ -197,7 +228,65 @@ docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
         --smooth ema --smooth-alpha 0.3
 ```
 
-Lower ``b-match-thresh`` with higher ``b-track-buffer`` stabilises the ball ID. For players, reducing ``p-match-thresh`` and increasing ``p-track-buffer`` helps retain IDs near the net. ``pre-min-area-q=0.15`` keeps distant players, while ``stitch=*`` merges short gaps. ``appearance-refine`` activates automatically when ``--frames-dir`` is supplied.
+Lower b-match-thresh + higher b-track-buffer стабілізують ID м’яча. Для гравців — зменшений p-match-thresh і збільшений p-track-buffer допомагають утримати ID біля сітки. pre-min-area-q=0.15 не ріже далекого гравця, а stitch=* зливає короткі обриви. appearance-refine активується автоматично, коли передано --frames-dir.
+
+### Verification pipeline (quick check)
+
+1) Візуалізація оверлею (детекції/треки → PNG + MP4):
+
+```bash
+# Tracks overlay to PNGs
+python -m src.draw_overlay \
+  --mode track \
+  --frames-dir /app/frames \
+  --tracks-json /app/tracks.json \
+  --out-dir /app/preview_tracks \
+  --draw-court --roi-json /app/court.json
+
+# Optional MP4 export (25 fps)
+python -m src.draw_overlay \
+  --mode track \
+  --frames-dir /app/frames \
+  --tracks-json /app/tracks.json \
+  --out-dir /app/preview_tracks \
+  --export-mp4 /app/preview_tracks.mp4 --fps 25 --draw-court --roi-json /app/court.json
+```
+
+Запускати можна всередині будь-якого образу, де є Python + OpenCV. Найпростіше — у decoder-track:latest з примонтованим репозиторієм:
+
+```bash
+docker run --rm -v "$(pwd)":/app decoder-track:latest \
+  python -m src.draw_overlay \
+    --mode track --frames-dir /app/frames \
+    --tracks-json /app/tracks.json \
+    --out-dir /app/preview_tracks \
+    --export-mp4 /app/preview_tracks.mp4 --fps 25 \
+    --draw-court --roi-json /app/court.json
+```
+
+Саніті-метрики (скільки унікальних гравців, частка кадрів з м’ячем, середня довжина треку м’яча):
+
+```bash
+docker run --rm -v "$(pwd)":/app decoder-track:latest \
+  python tools/verify_tennis_defaults.py --tracks-json /app/tracks.json
+# очікувано: players≈2, ball_frame_frac > 0, avg_ball_track збільшився проти базових налаштувань
+```
+
+### Troubleshooting
+
+- **YOLOX not found / torch CUDA issues:** запускайте детекцію через контейнер `decoder-detect:latest`:
+  ```bash
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest detect ...
+  ```
+- GPU не видно у контейнері: перевірте nvidia-smi у контейнері (див. вище) і встановіть NVIDIA Container Toolkit.
+- Порожні детекції для далекого гравця: спробуйте --pre-min-area-q 0.0 у трекері, або підвищіть --person-img-size у детекторі.
+- М’яч часто втрачає ID: зменшіть --b-match-thresh (наприклад, до 0.5) і/або збільште --b-track-buffer (до 180).
+- Контур корту не видно: переконайтесь, що court.json містить реальний полігон, а не «рамку кадру». Для дебагу:
+  ```bash
+  python -m src.draw_overlay --only-court --roi-json /app/court.json \
+         --frames-dir /app/frames --detections-json /app/detections.json \
+         --out-dir /app/preview_court
+  ```
 
 * ``tabulate``
 
@@ -253,17 +342,17 @@ The `YOLOX_REF` build argument accepts a tag, branch or commit. If the
 specified ref is unavailable, the build falls back to ``main`` and prints a
 warning.
 
-Run detection inside the container (assumes frames are in ``./frames``):
+Run detection inside the container (assumes frames are in `/app/frames`):
 
 ```bash
-docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
-    detect --frames-dir frames/ \
-    --output-json detections.json \
-    --model yolox-x \
-    --img-size 640 \
-    --conf-thres 0.30 \
-    --nms-thres 0.45 \
-    --classes 0 32
+docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
+    detect --frames-dir /app/frames \
+           --output-json /app/detections.json \
+           --model yolox-x \
+           --img-size 640 \
+           --conf-thres 0.30 \
+           --nms-thres 0.45 \
+           --classes 0 32
 ```
 
 > **Note:** the image already has ENTRYPOINT `python -m src.detect_objects`.
@@ -303,7 +392,7 @@ YOLOX modules need to be built.
 Only detections with score above ``--min-score`` are considered.
 
 ```bash
-docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
     track --detections-json /app/detections.json \
           --output-json /app/tracks.json \
           --min-score 0.30
@@ -444,17 +533,17 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 - **Run:**
 
   ```bash
-  docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
       detect --frames-dir /app/frames --output-json /app/detections.json \
       --two-pass --detect-court
 
   # disable court detection explicitly
-  docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
       detect --frames-dir /app/frames --output-json /app/detections.json \
       --two-pass --no-detect-court
 
   # single-pass mode
-  docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
       detect --frames-dir /app/frames --output-json /app/detections.json \
       --two-pass=false --conf-thres 0.5 --nms-thres 0.45 --img-size 960
   ```
@@ -466,7 +555,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 
 > **Note:** The image sets `ENTRYPOINT ["python","-m","src.detect_objects"]`.
 > For one-off Python commands use:
-> `docker run --rm --entrypoint python decoder-detect:latest -c "import yolox; print(yolox.__file__)"`.
+> `docker run --rm -v "$(pwd)":/app --entrypoint python decoder-detect:latest -c "import yolox; print(yolox.__file__)"`.
 
 - **Parameters:**
 
@@ -519,7 +608,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
 - **Run:**
 
   ```bash
-  docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
       track --detections-json /app/detections.json \
             --output-json /app/tracks.json \
             --fps 30 --min-score 0.10
@@ -528,7 +617,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   **Enhanced example with pre/post processing:**
 
   ```bash
-  docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
       track --detections-json /app/detections.json \
             --output-json /app/tracks.json \
             --fps 30 --min-score 0.28 \
@@ -573,7 +662,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   **Quick sanity check:**
 
   ```bash
-  docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+  docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
     track --detections-json /app/detections.json \
           --output-json /app/tracks.json \
           --fps 30 --min-score 0.28 \
@@ -597,13 +686,13 @@ Recommended thresholds for tennis court videos:
 Example commands:
 
 ```bash
-docker run --gpus all --rm -v $(pwd):/app decoder-detect:latest \
+docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
   detect --frames-dir /app/frames --output-json /app/detections.json \
   --two-pass --model yolox-x \
   --person-conf 0.55 --ball-conf 0.10 --nms-class-aware \
   --roi-json /app/court_meta.json --roi-margin 8
 
-docker run --gpus all --rm -v $(pwd):/app decoder-track:latest \
+docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
   track --detections-json /app/detections.json --output-json /app/tracks.json \
   --fps 30 --reid-reuse-window 125 \
   --p-track-thresh 0.50 --p-high-thresh 0.60 --p-match-thresh 0.60 --p-track-buffer 125 \
@@ -626,7 +715,7 @@ docker build -f Dockerfile.image -t decoder-image:latest .
 Run detection on ``frame_000019.jpg`` using the GPU:
 
 ```bash
-docker run --gpus all --rm -v $(pwd):/app decoder-image:latest \
+docker run --gpus all --rm -v "$(pwd)":/app decoder-image:latest \
     --image /app/frames01/frame_000019.jpg \
     --model yolox-x \
     --conf-thres 0.10 \
@@ -666,7 +755,7 @@ make draw-run-track
 make draw-run-mp4
 
 # Show CLI help
-docker run --rm decoder-draw:latest --help
+docker run --rm -v "$(pwd)":/app decoder-draw:latest --help
 ```
 
 The CLI reads frame images and one of `detections.json` or `tracks.json`.
@@ -697,7 +786,7 @@ draw   -> overlays in out/frames_viz and optional MP4
 
 Image name: `decoder-draw:latest` (CPU only). Mount the repository as `/app`.
 Includes `loguru` (>=0.7.0) for logging.
-Parameters: run `docker run --rm decoder-draw:latest --help`.
+Parameters: run `docker run --rm -v "$(pwd)":/app decoder-draw:latest --help`.
 Modes: `--mode auto|detect|track` (default `auto` picks `track` if `--tracks-json` exists, otherwise `detect`).
 
 ## Court Detection
@@ -711,7 +800,7 @@ Purpose: detect the tennis court polygon for each input frame.
 ```bash
 docker build -t decoder-court:latest -f Dockerfile.court .
 
-docker run --rm -v $(pwd):/app decoder-court:latest \
+docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames --output-json /app/court.json
 ```
 
@@ -737,3 +826,52 @@ The output `court.json` has one entry per frame:
 Court detections are always stored with `class=100`. Downstream detection and
 tracking stages rely on this mapping. If the court is not detected for a frame,
 the entry is simply omitted; it should never appear with a null class value.
+
+## Пайплан на перевірку (копіпаст і вперед)
+
+> Припускаємо: у корені репо є `frames/` з кадрами `frame_000001.png...`
+
+```bash
+# 0) build images (один раз)
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.court  -t decoder-court:latest .
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest .
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.track  -t decoder-track:latest .
+
+# 1) court
+docker run --rm -v "$(pwd)":/app decoder-court:latest \
+  --frames-dir /app/frames --output-json /app/court.json
+
+# 2) detect
+docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
+  detect --frames-dir /app/frames \
+         --output-json /app/detections.json \
+         --two-pass --nms-class-aware \
+         --roi-json /app/court.json --roi-margin 8 \
+         --detect-court
+
+# 3) track (тенісні дефолти + appearance-refine автоматично)
+docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
+  track --detections-json /app/detections.json \
+        --output-json /app/tracks.json \
+        --frames-dir /app/frames \
+        --fps 30 --min-score 0.28 \
+        --pre-nms-iou 0.6 --pre-min-area-q 0.15 --pre-topk 3 --pre-court-gate \
+        --p-match-thresh 0.55 --p-track-buffer 160 --reid-reuse-window 150 \
+        --b-match-thresh 0.55 --b-track-buffer 150 \
+        --stitch --stitch-iou 0.55 --stitch-gap 12 \
+        --smooth ema --smooth-alpha 0.3
+
+# 4) overlay preview (PNG + MP4)
+docker run --rm -v "$(pwd)":/app decoder-track:latest \
+  python -m src.draw_overlay \
+    --mode track \
+    --frames-dir /app/frames \
+    --tracks-json /app/tracks.json \
+    --out-dir /app/preview_tracks \
+    --export-mp4 /app/preview_tracks.mp4 --fps 25 \
+    --draw-court --roi-json /app/court.json
+
+# 5) sanity metrics
+docker run --rm -v "$(pwd)":/app decoder-track:latest \
+  python tools/verify_tennis_defaults.py --tracks-json /app/tracks.json
+```
