@@ -385,3 +385,38 @@ def test_draw_overlay_skips_court_polygon_when_disabled(
     assert res == 1
     assert dummy.poly_count == 0
     assert not warnings
+
+
+def test_export_mp4_skips_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frame = tmp_path / "frame_000001.png"
+    frame.write_bytes(b"0")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check, capture_output, text):
+        calls.append(cmd)
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(dov.subprocess, "run", fake_run)
+    mp4 = tmp_path / "out.mp4"
+    dov._export_mp4(tmp_path, mp4, 25, -1)
+    assert calls
+    assert "-crf" not in calls[0]
+
+
+def test_export_mp4_fallback_no_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frame = tmp_path / "frame_000001.png"
+    frame.write_bytes(b"0")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check, capture_output, text):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise dov.subprocess.CalledProcessError(1, cmd, stderr="Unrecognized option 'crf'")
+        return types.SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr(dov.subprocess, "run", fake_run)
+    mp4 = tmp_path / "out.mp4"
+    dov._export_mp4(tmp_path, mp4, 25, 23)
+    assert len(calls) >= 2
+    second = calls[1]
+    assert ("-crf" not in second) or ("-x264-params" in second)

@@ -275,7 +275,19 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --tracks-json /app/tracks.json \
   --output-dir /app/preview_tracks \
   --export-mp4 /app/preview_tracks.mp4 --fps 25 --draw-court --draw-court-lines --roi-json /app/court.json
+
+# Disable CRF if ffmpeg lacks support
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --mode track \
+  --frames-dir /app/frames \
+  --tracks-json /app/tracks.json \
+  --output-dir /app/preview_tracks \
+  --export-mp4 /app/preview_tracks.mp4 --fps 25 --crf -1 --draw-court --draw-court-lines --roi-json /app/court.json
 ```
+
+If your ffmpeg build does not support `-crf`, use `--crf -1` or install a full
+ffmpeg with libx264.
 
 Запускати можна всередині будь-якого образу, де є Python + OpenCV. Найпростіше — у decoder-track:latest з примонтованим репозиторієм:
 
@@ -508,6 +520,9 @@ python -m src.draw_tracks \
     --output-video out.mp4 \
     --fps 30
 ```
+
+If your ffmpeg build does not support `-crf`, use `--crf -1` or install a full
+ffmpeg with libx264.
 
 | Option | Description |
 | ------ | ----------- |
@@ -862,14 +877,17 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --smooth ema --smooth-alpha 0.3
 
 # 4) overlay preview (PNG + MP4)
-docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
-  -m src.draw_overlay \
-    --mode track \
-    --frames-dir /app/frames \
-    --tracks-json /app/tracks.json \
-    --output-dir /app/preview_tracks \
-    --export-mp4 /app/preview_tracks.mp4 --fps 25 \
-    --draw-court --draw-court-lines --roi-json /app/court.json
+  docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+    -m src.draw_overlay \
+      --mode track \
+      --frames-dir /app/frames \
+      --tracks-json /app/tracks.json \
+      --output-dir /app/preview_tracks \
+      --export-mp4 /app/preview_tracks.mp4 --fps 25 \
+      --draw-court --draw-court-lines --roi-json /app/court.json
+
+If your ffmpeg build does not support `-crf`, add `--crf -1` or install a full
+ffmpeg with libx264.
 
 # 5) sanity metrics
 docker run --rm -v "$(pwd)":/app decoder-track:latest \
