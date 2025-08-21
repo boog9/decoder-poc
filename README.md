@@ -169,6 +169,8 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
 
 Use `--draw-court=false` to hide the court polygon.
 
+`--roi-json` accepts either a single polygon `{ "polygon": [...] }` or a `court.json` file with per-frame polygons (the polygon from the first frame is used).
+
 - `--only-court`: Draw only the court contour without boxes or IDs.
 - `--palette-seed`: Stabilise the colour palette globally.
 - `--class-map`: Optional JSON/YAML mapping of class IDs to names.

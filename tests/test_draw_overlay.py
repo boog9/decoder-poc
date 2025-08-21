@@ -31,6 +31,18 @@ cv2_dummy.FONT_HERSHEY_SIMPLEX = 0
 cv2_dummy.LINE_AA = 16
 sys.modules.setdefault('cv2', cv2_dummy)
 
+# Stub for shapely.geometry to avoid heavy dependency
+class DummyPolygon:
+    def __init__(self, pts: list[list[float]]) -> None:
+        self.exterior = types.SimpleNamespace(coords=pts)
+
+
+geometry = types.SimpleNamespace(Polygon=DummyPolygon)
+shapely_stub = types.SimpleNamespace(geometry=geometry)
+sys.modules.setdefault("shapely", shapely_stub)
+sys.modules.setdefault("shapely.geometry", geometry)
+from shapely.geometry import Polygon  # type: ignore  # noqa: E402
+
 import pytest
 
 import src.draw_overlay as dov  # noqa: E402
@@ -71,6 +83,25 @@ def test_load_tracks_populates_track_id(tmp_path: Path) -> None:
     assert set(fm.keys()) == {"frame_000001.png"}
     assert "track_id" in fm["frame_000001.png"][0]
     assert fm["frame_000001.png"][0]["track_id"] is None
+
+
+def test_load_roi_poly_from_dict(tmp_path: Path) -> None:
+    roi = tmp_path / "roi.json"
+    roi.write_text('{"polygon": [[0,0], [1,0], [1,1], [0,1]]}')
+    poly = dov._load_roi_poly(roi)
+    assert isinstance(poly, Polygon)
+    assert tuple(poly.exterior.coords[0]) == (0, 0)
+
+
+def test_load_roi_poly_from_list(tmp_path: Path) -> None:
+    roi = tmp_path / "court.json"
+    roi.write_text(
+        '[{"polygon": [[0,0], [1,0], [1,1], [0,1]]}, '
+        '{"polygon": [[1,1], [2,1], [2,2], [1,2]]}]'
+    )
+    poly = dov._load_roi_poly(roi)
+    assert isinstance(poly, Polygon)
+    assert tuple(poly.exterior.coords[0]) == (0, 0)
 
 
 def test_parse_only_class_mixed() -> None:

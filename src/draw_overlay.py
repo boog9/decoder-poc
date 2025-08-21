@@ -21,10 +21,9 @@ import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Iterable, List, Optional, Tuple
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from shapely.geometry import Polygon
+from shapely.geometry import Polygon  # tennis tuning
 
 try:  # pragma: no cover - optional dependency
     import yaml
@@ -190,6 +189,35 @@ def _load_tracks(json_path: Path) -> Dict[str, List[dict]]:
             if "track_id" not in det:
                 det["track_id"] = None
     return frame_map
+
+
+# tennis tuning: tolerant ROI loader (dict or list)
+def _load_roi_poly(path: Path) -> "Polygon":
+    """Load a court ROI polygon from JSON file.
+
+    Accepts:
+      - dict with 'polygon' or 'roi' keys
+      - list of dicts with per-frame polygons; takes the first available polygon
+    """
+
+    with path.open() as fh:
+        data = json.load(fh)
+
+    if isinstance(data, dict):
+        pts = data.get("polygon") or data.get("roi")
+        if not pts:
+            raise ValueError("ROI JSON must contain 'polygon' or 'roi'")
+        return Polygon(pts)
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                pts = item.get("polygon") or item.get("roi")
+                if pts:
+                    return Polygon(pts)
+        raise ValueError("ROI list JSON has no entries with 'polygon'/'roi'")
+
+    raise TypeError("ROI JSON must be a dict or a list")
 
 
 def _resolve_frame_path(
@@ -577,13 +605,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     roi_poly: Optional[Polygon] = None
     if args.roi_json:
-        from shapely.geometry import Polygon  # type: ignore
-
-        with args.roi_json.open() as fh:
-            data = json.load(fh)
-        pts = data.get("polygon") or data.get("roi")
-        if pts:
-            roi_poly = Polygon(pts)
+        roi_poly = _load_roi_poly(args.roi_json)  # tennis tuning
 
     primary_map: Dict[int, int] = {}
     if mode == "track" and args.primary_id_stick > 0:
