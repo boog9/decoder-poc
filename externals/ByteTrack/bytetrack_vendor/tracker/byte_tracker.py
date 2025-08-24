@@ -20,7 +20,7 @@ stable ``track_id`` to detections across frames using greedy IoU matching.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 
@@ -74,8 +74,25 @@ class BYTETracker:
         self.tracks: List[STrack] = []
         self.next_id = 1
 
-    def update(self, tlwhs, scores, classes, frame_id):
-        """Update tracker state with new detections."""
+    def update(
+        self,
+        tlwhs,
+        scores,
+        classes,
+        frame_id,
+        homography=None,
+        assoc_w_iou: float = 1.0,
+        assoc_w_plane: float = 0.0,
+        plane_thresh: float = 0.25,
+        court_dims=None,
+        img_size: Tuple[float, float] | None = None,
+    ) -> List[STrack]:
+        """Update tracker state with new detections.
+
+        Supports optional plane-aware association when ``homography`` is
+        provided. The association cost combines IoU and normalised distance in
+        the projected plane.
+        """
 
         detections = [
             (np.asarray(tlwh, dtype=np.float64), float(score), cls)
@@ -85,17 +102,63 @@ class BYTETracker:
 
         assigned = set()
         results: List[STrack] = []
-        # Associate detections to existing tracks.
+
+        def _proj(x: float, y: float) -> tuple[float, float]:
+            if homography is None:
+                return x, y
+            denom = homography[2][0] * x + homography[2][1] * y + homography[2][2]
+            if abs(denom) < 1e-6:
+                return x, y
+            u = (homography[0][0] * x + homography[0][1] * y + homography[0][2]) / denom
+            v = (homography[1][0] * x + homography[1][1] * y + homography[1][2]) / denom
+            return u, v
+
+        def _center(box) -> tuple[float, float]:
+            x, y, w, h = box
+            return x + w / 2.0, y + h / 2.0
+
+        s = max(assoc_w_iou + assoc_w_plane, 1e-6)
+        w_iou, w_plane = assoc_w_iou / s, assoc_w_plane / s
+
+        plane_diag = None
+        if homography is not None and court_dims:
+            cw, ch = court_dims
+            plane_diag = max((cw ** 2 + ch ** 2) ** 0.5, 1e-6)
+
         for track in self.tracks:
-            best_iou = 0.0
+            best_cost = float("inf")
             best_idx: int | None = None
+            t_center = _center(track.tlwh)
+            t_plane = _proj(*t_center)
             for i, (tlwh, score, cls) in enumerate(detections):
                 if i in assigned:
                     continue
                 iou = _iou(track.tlwh, tlwh)
-                if iou > best_iou:
-                    best_iou, best_idx = iou, i
-            if best_idx is not None and best_iou >= self.match_thresh:
+                if iou < self.match_thresh:
+                    continue
+                d_center = _center(tlwh)
+                d_plane = _proj(*d_center)
+                if homography is None or court_dims is None:
+                    if img_size is not None:
+                        fw, fh = img_size
+                        diag = (fw ** 2 + fh ** 2) ** 0.5
+                    else:
+                        img_w = max(track.tlwh[0] + track.tlwh[2], tlwh[0] + tlwh[2])
+                        img_h = max(track.tlwh[1] + track.tlwh[3], tlwh[1] + tlwh[3])
+                        diag = (img_w ** 2 + img_h ** 2) ** 0.5 or 1.0
+                else:
+                    diag = plane_diag
+                dist = ((t_plane[0] - d_plane[0]) ** 2 + (t_plane[1] - d_plane[1]) ** 2) ** 0.5
+                dist_norm = dist / max(diag, 1e-6)
+                if dist_norm > 1.0:
+                    dist_norm = 1.0
+                if homography is not None and court_dims and dist_norm > plane_thresh:
+                    continue
+                cost = w_iou * (1 - iou) + w_plane * dist_norm
+                if cost < best_cost:
+                    best_cost = cost
+                    best_idx = i
+            if best_idx is not None:
                 tlwh, score, cls = detections[best_idx]
                 track.tlwh = tlwh
                 track.score = score
@@ -106,10 +169,8 @@ class BYTETracker:
             else:
                 track.missed += 1
 
-        # Remove tracks that have been missed for too long.
         self.tracks = [t for t in self.tracks if t.missed <= self.track_buffer]
 
-        # Create new tracks for unmatched detections.
         for i, (tlwh, score, cls) in enumerate(detections):
             if i in assigned:
                 continue

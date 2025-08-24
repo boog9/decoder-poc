@@ -66,6 +66,8 @@ yolox_mod = sys.modules.setdefault("yolox", types.ModuleType("yolox"))
 setattr(yolox_mod, "__version__", "0.0")
 
 import src.detect_objects as dobj
+import src.track_objects as tobj
+from externals.ByteTrack.bytetrack_vendor.tracker.byte_tracker import BYTETracker
 
 dobj.torch.cuda.is_available = lambda: True
 
@@ -764,6 +766,140 @@ def test_update_tracker_mot_two_params_dets_img_size() -> None:
     assert res == ["ok"]
     assert tracker.args[1] == (10, 20)
     assert tracker.args[0][0][:4] == [0, 0, 10, 20]
+
+
+def test_update_tracker_with_assoc_params() -> None:
+    class DummyTracker:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def update(
+            self,
+            tlwhs,
+            scores,
+            classes,
+            frame_id,
+            *,
+            homography=None,
+            assoc_w_iou: float = 1.0,
+            assoc_w_plane: float = 0.0,
+            plane_thresh: float = 0.25,
+            court_dims=None,
+            img_size=None,
+        ):
+            self.kwargs = (
+                homography,
+                assoc_w_iou,
+                assoc_w_plane,
+                plane_thresh,
+                court_dims,
+                img_size,
+            )
+            return ["ok"]
+
+    tracker = DummyTracker()
+    res = dobj._update_tracker(
+        tracker,
+        [[0, 0, 10, 20]],
+        [0.9],
+        [0],
+        1,
+        homography=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        assoc_w_iou=0.4,
+        assoc_w_plane=0.6,
+        plane_thresh=0.25,
+        court_dims=(10.0, 5.0),
+        img_size=(1920, 1080),
+    )
+
+    assert res == ["ok"]
+    assert tracker.kwargs == (
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        0.4,
+        0.6,
+        0.25,
+        (10.0, 5.0),
+        (1920, 1080),
+    )
+
+
+def test_extract_homography_map_reshape_placeholder() -> None:
+    raw = [
+        {"frame": 1, "class": "tennis_court", "homography": list(range(9))},
+        {
+            "frame": 2,
+            "class": "tennis_court",
+            "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "placeholder": True,
+        },
+    ]
+    res = tobj._extract_homography_map(raw)
+    assert res[1] == [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    assert 2 not in res
+
+
+def test_byte_tracker_weight_norm_and_clamp() -> None:
+    t1 = BYTETracker(match_thresh=0.0)
+    t1.update([[0, 0, 100, 100]], [1.0], [0], 0)
+    r1 = t1.update(
+        [[20, 0, 100, 100]],
+        [1.0],
+        [0],
+        1,
+        assoc_w_iou=2.5,
+        assoc_w_plane=2.5,
+        img_size=(10, 10),
+    )
+    t2 = BYTETracker(match_thresh=0.0)
+    t2.update([[0, 0, 100, 100]], [1.0], [0], 0)
+    r2 = t2.update(
+        [[20, 0, 100, 100]],
+        [1.0],
+        [0],
+        1,
+        assoc_w_iou=1.0,
+        assoc_w_plane=1.0,
+        img_size=(10, 10),
+    )
+    assert [tr.track_id for tr in r1] == [1]
+    assert [tr.track_id for tr in r2] == [1]
+
+
+def test_byte_tracker_iou_gating() -> None:
+    tracker = BYTETracker(match_thresh=0.5)
+    tracker.update([[0, 0, 10, 10]], [0.9], [0], 0)
+    res = tracker.update([[20, 0, 10, 10]], [0.9], [0], 1, img_size=(100, 100))
+    assert all(tr.track_id != 1 for tr in res)
+
+
+def test_byte_tracker_pixel_diag_img_size() -> None:
+    tlwh_a = [15, 0, 10, 10]
+    tlwh_b = [100, 0, 1000, 1000]
+    tracker_no = BYTETracker(match_thresh=0.0)
+    tracker_no.update([[0, 0, 10, 10]], [1.0], [0], 0)
+    res_no = tracker_no.update(
+        [tlwh_a, tlwh_b],
+        [1.0, 1.0],
+        [0, 0],
+        1,
+        assoc_w_iou=0.0,
+        assoc_w_plane=1.0,
+    )
+    matched_no = next(tr for tr in res_no if tr.track_id == 1)
+    assert list(matched_no.tlwh) == tlwh_b
+    tracker_yes = BYTETracker(match_thresh=0.0)
+    tracker_yes.update([[0, 0, 10, 10]], [1.0], [0], 0)
+    res_yes = tracker_yes.update(
+        [tlwh_a, tlwh_b],
+        [1.0, 1.0],
+        [0, 0],
+        1,
+        assoc_w_iou=0.0,
+        assoc_w_plane=1.0,
+        img_size=(1920, 1080),
+    )
+    matched_yes = next(tr for tr in res_yes if tr.track_id == 1)
+    assert list(matched_yes.tlwh) == tlwh_a
 
 
 
