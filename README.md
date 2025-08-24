@@ -810,57 +810,6 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 - Provide `--weights /app/weights/tcd.pth`; without weights, add `--allow-placeholder` to emit a full-frame placeholder
   (real geometry is recommended for gating and line rendering)
 
-### Court weights
-
-Download the pretrained TennisCourtDetector checkpoint from the official
-repository and save it as `./weights/model.pt`.
-Original weights (Google Drive):
-https://drive.google.com/file/d/1f-Co64ehgq4uddcQm1aFBDtbnyZhQvgG/view?usp=drive_link
-
-After weights are available, the detector will pick them up automatically.
-
-#### A) Build-time include (preferred)
-
-```bash
-mkdir -p weights && cp /path/to/model.pt weights/model.pt
-DOCKER_BUILDKIT=1 docker build -f Dockerfile.court -t decoder-court:latest .
-docker run --rm --entrypoint bash decoder-court:latest -lc 'echo "$COURT_WEIGHTS"; ls -lh "$COURT_WEIGHTS"'
-docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir /app/frames --output-json /app/court.json \
-  --device cuda --min-conf 0.05
-```
-
-#### B) Runtime bind-mount
-
-```bash
-docker run --rm \
-  -v "$(pwd)":/app \
-  -v "$(pwd)/weights/model.pt":/app/model.pt:ro \
-  decoder-court:latest \
-  --frames-dir /app/frames --output-json /app/court.json \
-  --weights /app/model.pt --device cuda --min-conf 0.05
-```
-
-Optional check:
-
-```bash
-docker run --rm --entrypoint bash decoder-court:latest -lc '/app/scripts/check_court_weights.sh || echo "weights missing"'
-```
-
-#### Acceptance criteria
-
-- [ ] Build succeeds whether or not `./weights/model.pt` exists.
-- [ ] If `./weights/model.pt` existed at build time, the file is visible inside the image:
-  ```bash
-  docker run --rm --entrypoint bash decoder-court:latest -lc 'echo "$COURT_WEIGHTS"; ls -lh "$COURT_WEIGHTS"'
-  ```
-- [ ] With frames and weights provided, the detector writes a non-empty `court.json`:
-  ```bash
-  docker run --rm -v "$(pwd)":/app decoder-court:latest \
-    --frames-dir /app/frames --output-json /app/court.json --device cuda --min-conf 0.05
-  head -n 20 court.json
-  ```
-
 ### Parameters
 
 | Option | Description | Default |
