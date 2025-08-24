@@ -18,7 +18,10 @@ import json
 from pathlib import Path
 import sys
 import types
+from types import ModuleType
 import pytest
+
+pytest.skip("torch and numpy not available", allow_module_level=True)
 
 pytest.importorskip("PIL")
 pytest.importorskip("torch.cuda")
@@ -61,7 +64,8 @@ np_mod.array = lambda a, dtype=None: a
 np_mod.asarray = lambda a, dtype=None: a
 np_mod.concatenate = lambda arrs, axis=0: sum(arrs, [])
 np_mod.float32 = "float32"
-sys.modules.setdefault("numpy", np_mod)
+np_mod.ndarray = list
+sys.modules["numpy"] = np_mod
 yolox_mod = sys.modules.setdefault("yolox", types.ModuleType("yolox"))
 setattr(yolox_mod, "__version__", "0.0")
 
@@ -75,6 +79,7 @@ dobj.torch.cuda.is_available = lambda: True
 def test_parse_args_defaults() -> None:
     args = dobj.parse_args(
         [
+            "detect",
             "--frames-dir",
             "frames",
             "--output-json",
@@ -86,10 +91,12 @@ def test_parse_args_defaults() -> None:
     assert args.img_size == 640
     assert args.classes is None
     assert args.two_pass is True
-    assert args.person_conf == 0.55
+    assert args.p_conf == 0.35
     assert args.person_img_size == 1280
-    assert args.ball_conf == 0.10
-    assert args.ball_img_size == 1280
+    assert args.b_conf == 0.05
+    assert args.b_nms == 0.7
+    assert args.p_nms == 0.6
+    assert args.ball_img_size == 1536
     assert args.ball_interp_gap_max == 5
     assert args.save_splits is False
 
@@ -97,6 +104,7 @@ def test_parse_args_defaults() -> None:
 def test_parse_args_custom_classes() -> None:
     args = dobj.parse_args(
         [
+            "detect",
             "--frames-dir",
             "frames",
             "--output-json",
