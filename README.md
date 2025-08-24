@@ -841,6 +841,38 @@ Frames without a confident detection are omitted unless
 `--allow-placeholder` is enabled, in which case a full-frame polygon with
 `"placeholder": true` is returned.
 
+## Court Calibration
+
+Service/Docker image name: `decoder-court:latest`
+
+Purpose: interpolate court homographies between key frames.
+
+### Startup example
+
+```bash
+# CPU-only image by default:
+docker run --rm -v "$(pwd)":/app decoder-court:latest \
+  --frames-dir /app/frames --out-json /app/court.json \
+  --device cpu --min-score 0.6 --stride 10
+```
+
+- Mount `/app` to access frames and outputs
+- GPU note: this image is CPU-only. `--device cuda` requires switching the base image to a CUDA runtime.
+- Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `placeholder`
+
+### Parameters
+
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `--frames-dir` | Input directory with frame images | **required** |
+| `--out-json` | Output path for court calibration data | **required** |
+| `--device` | `cuda` or `cpu` for detector execution | `cpu` |
+| `--min-score` | Minimum detection confidence | `0.4` |
+| `--stride` | Process every Nth frame | `5` |
+
+Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`. The
+`--stabilize` flag is accepted for compatibility but currently does nothing.
+
 ## Пайплан на перевірку (копіпаст і вперед)
 
 > Припускаємо: у корені репо є `frames/` з кадрами `frame_000001.png...`
@@ -851,10 +883,11 @@ DOCKER_BUILDKIT=1 docker build -f Dockerfile.court  -t decoder-court:latest .
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.detect -t decoder-detect:latest .
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.track  -t decoder-track:latest .
 
-# 1) court
+# 1) court (calibration + interpolation)
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir /app/frames --output-json /app/court.json \
-  --weights /app/weights/tcd.pth --sample-rate 5 --stabilize ema
+  --frames-dir /app/frames --out-json /app/court.json \
+  --stride 5 --device cpu
+# (also works with --output-json, --sample-rate, --stabilize (no-op))
 
 # 2) detect
 docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
