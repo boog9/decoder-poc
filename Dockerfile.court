@@ -21,5 +21,35 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 WORKDIR /app
 COPY . /app
+ENV COURT_WEIGHTS=/app/model.pt
+RUN set -eux; \
+    mkdir -p /app/scripts; \
+    if [ -s "/app/weights/model.pt" ]; then \
+        cp -v "/app/weights/model.pt" "$COURT_WEIGHTS"; \
+    elif [ -s "/app/services/court_detector/weights/model.pt" ]; then \
+        cp -v "/app/services/court_detector/weights/model.pt" "$COURT_WEIGHTS"; \
+    else \
+        echo "WARNING: court weights not found in /app/weights/model.pt. You can bind-mount and pass --weights /app/model.pt at runtime."; \
+    fi; \
+    cat <<'EOF' > /app/scripts/check_court_weights.sh; \
+#!/usr/bin/env bash
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# http://www.apache.org/licenses/LICENSE-2.0
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+set -euo pipefail
+if [ -s "$COURT_WEIGHTS" ]; then
+  stat -c "%n %s bytes" "$COURT_WEIGHTS"
+else
+  echo "missing $COURT_WEIGHTS" >&2
+  exit 1
+fi
+EOF
+    chmod +x /app/scripts/check_court_weights.sh
 
 ENTRYPOINT ["python", "-m", "src.court_detector"]
