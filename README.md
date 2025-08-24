@@ -232,9 +232,19 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --p-match-thresh 0.55 --p-track-buffer 160 --reid-reuse-window 150 \
         --b-match-thresh 0.55 --b-track-buffer 150 \
         --stitch --stitch-iou 0.55 --stitch-gap 12 \
-        --smooth ema --smooth-alpha 0.3
+        --smooth ema --smooth-alpha 0.3 \
+        --assoc-plane court --assoc-w-iou 0.4 --assoc-w-plane 0.6 \
+        --assoc-plane-thresh 0.25
 ```
 > `pre-court-gate` works only with a real court polygon. If `court.json` is a full-frame placeholder, the gate has no effect—either disable it (`--no-pre-court-gate`) or run `decoder-court` with weights to obtain real geometry.
+
+Association tuning:
+
+- `--assoc-plane {pixel,court}`: coordinate space for distance term. `court` projects centres via homography; falls back to pixel distance when homography is missing.
+- `--assoc-w-iou`: weight for `(1 - IoU)` in the cost (default `1.0`).
+- `--assoc-w-plane`: weight for plane distance in the cost (default `0.0`).
+- `--assoc-plane-thresh`: max allowed normalised plane distance for a match
+  (default `0.25`).
 
 If you see `pre-court-gate disabled: detected full-frame court polygon`, this is expected for placeholder polygons.
 

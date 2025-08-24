@@ -480,6 +480,30 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Down-weight player associations across court halves",
     )  # tennis tuning
+    tr.add_argument(
+        "--assoc-plane",
+        choices=["pixel", "court"],
+        default="pixel",
+        help="Coordinate space for association distance term",
+    )
+    tr.add_argument(
+        "--assoc-w-iou",
+        type=float,
+        default=1.0,
+        help="Weight for IoU component in association cost",
+    )
+    tr.add_argument(
+        "--assoc-w-plane",
+        type=float,
+        default=0.0,
+        help="Weight for plane distance component in association cost",
+    )
+    tr.add_argument(
+        "--assoc-plane-thresh",
+        type=float,
+        default=0.25,
+        help="Max allowed normalized plane distance for a match (0..1)",
+    )
     # Person tracker params
     tr.add_argument(
         "--p-track-thresh",
@@ -613,19 +637,47 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
-    """Call ``tracker.update`` with a compatible signature."""
+def _update_tracker(
+    tracker,
+    tlwhs,
+    scores,
+    classes,
+    frame_id,
+    homography=None,
+    assoc_w_iou: float = 1.0,
+    assoc_w_plane: float = 0.0,
+    plane_thresh: float = 0.25,
+    court_dims: Tuple[float, float] | None = None,
+    img_size: Tuple[float, float] | None = None,
+):
+    """Call ``tracker.update`` with a compatible signature.
+
+    Extra association parameters are forwarded when supported by the tracker.
+    """
 
     sig = inspect.signature(tracker.update)
     params = list(sig.parameters)
     if params and params[0] == "self":
         params = params[1:]
 
-    if params == ["tlwhs", "scores", "classes", "frame_id"]:
-        return tracker.update(tlwhs, scores, classes, frame_id)
+    extra = {}
+    if "homography" in params:
+        extra["homography"] = homography
+    if "assoc_w_iou" in params:
+        extra["assoc_w_iou"] = assoc_w_iou
+    if "assoc_w_plane" in params:
+        extra["assoc_w_plane"] = assoc_w_plane
+    if "plane_thresh" in params:
+        extra["plane_thresh"] = plane_thresh
+    if "court_dims" in params:
+        extra["court_dims"] = court_dims
+    if "img_size" in params:
+        extra["img_size"] = img_size
 
-    if params == ["tlwhs", "scores", "frame_id"]:
-        return tracker.update(tlwhs, scores, frame_id)
+    if params[:4] == ["tlwhs", "scores", "classes", "frame_id"]:
+        return tracker.update(tlwhs, scores, classes, frame_id, **extra)
+    if params[:3] == ["tlwhs", "scores", "frame_id"]:
+        return tracker.update(tlwhs, scores, frame_id, **extra)
 
     def _cls_id(c):
         if isinstance(c, int):
@@ -644,7 +696,29 @@ def _update_tracker(tracker, tlwhs, scores, classes, frame_id):
             ],
             axis=1,
         )
-        return tracker.update(dets, frame_id)
+        return tracker.update(dets, frame_id, **extra)
+
+    if params == ["dets", "img_size"]:
+        def _cls_id(c):
+            if isinstance(c, int):
+                return c
+            key = _norm(c)
+            key = CLASS_ALIASES.get(key, key)
+            return CLASS_NAME_TO_ID.get(key, -1)
+
+        cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
+        dets = np.concatenate(
+            [
+                np.asarray(tlwhs, dtype=np.float32),
+                np.asarray(scores, dtype=np.float32)[:, None],
+                cls_arr,
+            ],
+            axis=1,
+        )
+
+        im_w = max(b[0] + b[2] for b in tlwhs) if tlwhs else 1920
+        im_h = max(b[1] + b[3] for b in tlwhs) if tlwhs else 1080
+        return tracker.update(dets, (im_w, im_h))
 
     if params == ["output_results", "img_info", "img_size"]:
         cls_arr = np.array([_cls_id(c) for c in classes], dtype=np.float32)[:, None]
@@ -1541,6 +1615,10 @@ def main(argv: Iterable[str] | None = None) -> None:
                 args.pre_topk,
                 args.pre_court_gate,
                 args.half_court_gate,
+                args.assoc_plane,
+                args.assoc_w_iou,
+                args.assoc_w_plane,
+                args.assoc_plane_thresh,
                 args.court_json,
                 args.stitch,
                 args.stitch_iou,

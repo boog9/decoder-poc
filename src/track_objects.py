@@ -20,6 +20,10 @@ from typing import Dict, List, Tuple
 
 import inspect
 from loguru import logger
+try:
+    from PIL import Image  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    Image = None  # Pillow is an optional dependency
 
 from .detect_objects import (
     _extract_frame_id,
@@ -275,6 +279,110 @@ def _extract_court_map(raw: list) -> Dict[int, List[List[float]]]:
         if poly:
             result[frame_id] = poly
     return result
+
+
+def _to_H3x3(h):
+    """Return homography ``h`` as a 3x3 matrix.
+
+    Accepts either a nested 3x3 list or a flat list of length 9 and returns a
+    nested list representation. Values are returned as-is when ``h`` already
+    appears to be 3x3.
+    """
+
+    if isinstance(h, list) and len(h) == 9 and not isinstance(h[0], list):
+        return [
+            [h[0], h[1], h[2]],
+            [h[3], h[4], h[5]],
+            [h[6], h[7], h[8]],
+        ]
+    return h
+
+
+def _extract_homography_map(raw: list) -> Dict[int, List[List[float]]]:
+    """Return mapping of frame index to homography matrix."""
+
+    court_cls = CLASS_NAME_TO_ID.get("tennis_court")
+    result: Dict[int, List[List[float]]] = {}
+    for item in raw:
+        if item.get("placeholder"):
+            continue
+        if "detections" in item:
+            frame_id = _extract_frame_id(item.get("frame"))
+            if frame_id is None:
+                continue
+            for det in item.get("detections", []):
+                if det.get("placeholder"):
+                    continue
+                cls_val = det.get("class")
+                if isinstance(cls_val, str):
+                    cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
+                    if cls_key != "tennis_court":
+                        continue
+                else:
+                    try:
+                        if int(cls_val) != court_cls:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                h = det.get("homography")
+                if h:
+                    H = _to_H3x3(h)
+                    if (
+                        isinstance(H, list)
+                        and len(H) == 3
+                        and all(isinstance(r, list) and len(r) == 3 for r in H)
+                        and all(math.isfinite(v) for r in H for v in r)
+                    ):
+                        result[frame_id] = H
+            continue
+
+        frame_id = _extract_frame_id(item.get("frame"))
+        if frame_id is None:
+            continue
+        cls_val = item.get("class")
+        if isinstance(cls_val, str):
+            cls_key = CLASS_ALIASES.get(_norm(cls_val), _norm(cls_val))
+            if cls_key != "tennis_court":
+                continue
+        else:
+            try:
+                if int(cls_val) != court_cls:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        h = item.get("homography")
+        if h:
+            H = _to_H3x3(h)
+            if (
+                isinstance(H, list)
+                and len(H) == 3
+                and all(isinstance(r, list) and len(r) == 3 for r in H)
+                and all(math.isfinite(v) for r in H for v in r)
+            ):
+                result[frame_id] = H
+    return result
+
+
+def _is_identity_homography(h: List[List[float]]) -> bool:
+    """Return ``True`` if ``h`` is close to identity."""
+
+    for i in range(3):
+        for j in range(3):
+            expected = 1.0 if i == j else 0.0
+            if abs(h[i][j] - expected) > 1e-3:
+                return False
+    return True
+
+
+def _apply_homography(h: List[List[float]], x: float, y: float) -> Tuple[float, float]:
+    """Project ``(x, y)`` using homography ``h``."""
+
+    denom = h[2][0] * x + h[2][1] * y + h[2][2]
+    if abs(denom) < 1e-6:
+        return x, y
+    u = (h[0][0] * x + h[0][1] * y + h[0][2]) / denom
+    v = (h[1][0] * x + h[1][1] * y + h[1][2]) / denom
+    return u, v
 
 
 def _pre_min_area_quantile(detections: List[dict], q: float) -> float:
@@ -633,6 +741,10 @@ def track_detections(
     pre_topk: int = 0,
     pre_court_gate: bool = False,
     half_court_gate: bool = False,
+    assoc_plane: str = "pixel",
+    assoc_w_iou: float = 1.0,
+    assoc_w_plane: float = 0.0,
+    assoc_plane_thresh: float = 0.25,
     court_json: Path | None = None,
     stitch: bool = False,
     stitch_iou: float = 0.55,
@@ -654,6 +766,25 @@ def track_detections(
     if not isinstance(raw, list):
         raise ValueError("detections-json must contain a list")
 
+    frame_sizes: Dict[int, Tuple[float, float]] = {}
+    for item in raw:
+        fid = _extract_frame_id(item.get("frame"))
+        if fid is None:
+            continue
+        w = item.get("width")
+        h = item.get("height")
+        if isinstance(w, (int, float)) and isinstance(h, (int, float)):
+            frame_sizes[fid] = (float(w), float(h))
+
+    default_size: Tuple[int, int] | None = None
+    if not frame_sizes and frames_dir is not None and Image is not None:
+        try:
+            first = next(frames_dir.iterdir())
+            with Image.open(first) as img:
+                default_size = img.size  # (width, height)
+        except Exception:
+            default_size = None
+
     frames = _load_detections_grouped(detections_json, min_score)
 
     court_cls = CLASS_NAME_TO_ID.get("tennis_court")
@@ -661,11 +792,14 @@ def track_detections(
         try:
             with court_json.open() as fh:
                 court_raw = json.load(fh)
-            court_map = _extract_court_map(court_raw)
         except Exception:
-            court_map = {}
+            court_raw = []
     else:
-        court_map = _extract_court_map(raw)
+        court_raw = raw
+    court_map = _extract_court_map(court_raw)
+    homography_map = (
+        _extract_homography_map(court_raw) if assoc_plane == "court" else {}
+    )
 
     court_mid_y = None
     total_frames = len(frames)
@@ -765,6 +899,22 @@ def track_detections(
     out: List[dict] = []
 
     for frame_id in sorted(frames):
+        frame_w, frame_h = frame_sizes.get(frame_id, default_size or (0.0, 0.0))
+        if not frame_w or not frame_h:
+            max_x2 = 0.0
+            max_y2 = 0.0
+            for cls_map in frames[frame_id].values():
+                for det in cls_map:
+                    max_x2 = max(max_x2, det["bbox"][2])
+                    max_y2 = max(max_y2, det["bbox"][3])
+            poly = court_map.get(frame_id)
+            if poly:
+                for x, y in poly:
+                    max_x2 = max(max_x2, x)
+                    max_y2 = max(max_y2, y)
+            frame_w = max_x2 or 1920.0
+            frame_h = max_y2 or 1080.0
+
         for cls_id, tracker in trackers.items():
             dets = frames[frame_id].get(cls_id, [])
             if cls_id == CLASS_NAME_TO_ID["sports ball"]:
@@ -839,7 +989,45 @@ def track_detections(
             ]
             scores = [d["score"] for d in dets]
             classes = [cls_id] * len(dets)
-            tracks = _update_tracker(tracker, tlwhs, scores, classes, frame_id)
+            H = None
+            court_dims: Tuple[float, float] | None = None
+            if assoc_plane == "court":
+                H = homography_map.get(frame_id)
+                poly = court_map.get(frame_id)
+                if H is not None and poly:
+                    if _is_identity_homography(H) or _poly_is_full_frame(poly):
+                        H = None
+                    else:
+                        pts = [_apply_homography(H, p[0], p[1]) for p in poly]
+                        xs = [p[0] for p in pts]
+                        ys = [p[1] for p in pts]
+                        cw = max(xs) - min(xs)
+                        ch = max(ys) - min(ys)
+                        if cw <= 1e-3 or ch <= 1e-3:
+                            logger.debug(
+                                "homography rejected on frame %s: projected court too small (cw=%.4f, ch=%.4f)",
+                                frame_id,
+                                cw,
+                                ch,
+                            )
+                            H = None
+                        else:
+                            court_dims = (cw, ch)
+                else:
+                    H = None
+            tracks = _update_tracker(
+                tracker,
+                tlwhs,
+                scores,
+                classes,
+                frame_id,
+                homography=H if assoc_plane == "court" else None,
+                assoc_w_iou=assoc_w_iou,
+                assoc_w_plane=assoc_w_plane,
+                plane_thresh=assoc_plane_thresh,
+                court_dims=court_dims if assoc_plane == "court" else None,
+                img_size=(frame_w, frame_h),
+            )
 
             current_ids = set()
             for tr in tracks:
