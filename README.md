@@ -625,12 +625,12 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--court-use-homography` | Enable homography refinement (placeholder) | `false` |
   | `--court-refine-kps` | Enable keypoint refinement (placeholder) | `false` |
   | `--court-weights` | Optional path to court model weights | _none_ |
-  | `--person-conf` | Person detection confidence (alias: --conf-person) | `0.55` |
-  | `--person-nms` | Person NMS threshold | `0.45` |
+  | `--p-conf` | Person detection confidence | `0.35` |
+  | `--p-nms` | Person NMS threshold | `0.6` |
   | `--person-img-size` | Person inference image size | `1280` |
   | `--person-classes` | Person classes | `person` |
-  | `--ball-conf` | Ball detection confidence (alias: --conf-ball) | `0.15` |
-  | `--ball-nms` | Ball NMS threshold | `0.30` |
+  | `--b-conf` | Ball detection confidence | `0.05` |
+  | `--b-nms` | Ball NMS threshold | `0.7` |
   | `--ball-img-size` | Ball inference image size | `1536` |
   | `--ball-classes` | Ball classes | `"sports ball"` |
   | `--nms-class-aware` | Apply NMS per class | `true` |
@@ -729,8 +729,8 @@ Recommended thresholds for tennis court videos:
 
 | Flag | Person | Ball |
 | ---- | ------ | ---- |
-| `--person-conf` | 0.55 | - |
-| `--ball-conf` | - | 0.10 |
+| `--p-conf` | 0.35 | - |
+| `--b-conf` | - | 0.05 |
 | `--p-track-buffer` | 125 | - |
 | `--b-track-buffer` | - | 90 |
 
@@ -740,7 +740,7 @@ Example commands:
 docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
   detect --frames-dir /app/frames --output-json /app/detections.json \
   --two-pass --model yolox-x \
-  --person-conf 0.55 --ball-conf 0.10 --nms-class-aware \
+  --p-conf 0.30 --b-conf 0.05 --p-nms 0.6 --b-nms 0.7 --nms-class-aware \
   --roi-json /app/court_meta.json --roi-margin 8
 
 docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \

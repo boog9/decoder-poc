@@ -157,6 +157,14 @@ except Exception:  # pragma: no cover - optional dependency
 
 YOLOX_MODELS = {"yolox-s", "yolox-m", "yolox-l", "yolox-x"}
 
+# Default thresholds
+DEFAULT_CONF_THRES = 0.3
+DEFAULT_NMS_THRES = 0.45
+DEFAULT_P_CONF = 0.35
+DEFAULT_B_CONF = 0.05
+DEFAULT_P_NMS = 0.6
+DEFAULT_B_NMS = 0.7
+
 # Number of classes in the default COCO-trained YOLOX models.
 
 # Map CLI model names to torch.hub callable names.
@@ -361,17 +369,59 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--model", type=str, default="yolox-x", choices=sorted(YOLOX_MODELS)
     )
     det.add_argument("--img-size", type=int, default=640)
-    det.add_argument("--conf-thres", type=float, default=0.3)
-    det.add_argument("--nms-thres", type=float, default=0.45)
+    det.add_argument("--conf-thres", type=float, default=DEFAULT_CONF_THRES)
+    det.add_argument("--nms-thres", type=float, default=DEFAULT_NMS_THRES)
     det.add_argument("--classes", nargs="+", type=int, default=None)
     det.add_argument("--two-pass", action=argparse.BooleanOptionalAction, default=True)  # tennis tuning
-    det.add_argument("--person-conf", "--conf-person", type=float, default=0.55)  # tennis tuning
-    det.add_argument("--ball-conf", "--conf-ball", type=float, default=0.10)  # tennis tuning
-    det.add_argument("--person-nms", type=float, default=0.45)
+    det.add_argument(
+        "--p-conf",
+        "--person-conf",
+        "--conf-person",
+        dest="p_conf",
+        type=float,
+        default=None,
+        help=(
+            "Person detection confidence; defaults to 0.35 unless"
+            " overridden or falling back to --conf-thres"
+        ),
+    )  # tennis tuning
+    det.add_argument(
+        "--b-conf",
+        "--ball-conf",
+        "--conf-ball",
+        dest="b_conf",
+        type=float,
+        default=None,
+        help=(
+            "Ball detection confidence; defaults to 0.05 unless"
+            " overridden or falling back to --conf-thres"
+        ),
+    )  # tennis tuning
+    det.add_argument(
+        "--p-nms",
+        "--person-nms",
+        dest="p_nms",
+        type=float,
+        default=None,
+        help=(
+            "Person NMS IoU threshold; defaults to 0.6 unless"
+            " overridden or falling back to --nms-thres"
+        ),
+    )
     det.add_argument("--person-img-size", type=int, default=1280)  # tennis tuning
     det.add_argument("--person-classes", nargs="+", default=["person"])
-    det.add_argument("--ball-nms", type=float, default=0.30)
-    det.add_argument("--ball-img-size", type=int, default=1280)  # tennis tuning
+    det.add_argument(
+        "--b-nms",
+        "--ball-nms",
+        dest="b_nms",
+        type=float,
+        default=None,
+        help=(
+            "Ball NMS IoU threshold; defaults to 0.7 unless"
+            " overridden or falling back to --nms-thres"
+        ),
+    )
+    det.add_argument("--ball-img-size", type=int, default=1536)  # tennis tuning
     det.add_argument("--ball-classes", nargs="+", default=["sports ball"])
     det.add_argument(
         "--nms-class-aware",
@@ -630,6 +680,19 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
     # Parse provided arguments or ``sys.argv`` when ``argv`` is ``None``.
     args = parser.parse_args(argv)
+
+    # Resolve per-class thresholds with fallback to global options.
+    def _resolve(value: float | None, global_val: float, global_def: float, default: float) -> float:
+        if value is not None:
+            return value
+        if global_val != global_def:
+            return global_val
+        return default
+
+    args.p_conf = _resolve(args.p_conf, args.conf_thres, DEFAULT_CONF_THRES, DEFAULT_P_CONF)
+    args.b_conf = _resolve(args.b_conf, args.conf_thres, DEFAULT_CONF_THRES, DEFAULT_B_CONF)
+    args.p_nms = _resolve(args.p_nms, args.nms_thres, DEFAULT_NMS_THRES, DEFAULT_P_NMS)
+    args.b_nms = _resolve(args.b_nms, args.nms_thres, DEFAULT_NMS_THRES, DEFAULT_B_NMS)
 
     # Default to ``detect`` when no subcommand is supplied.
     if args.cmd is None:
@@ -1049,12 +1112,12 @@ def detect_two_pass(
     frames_dir: Path,
     out_json: Path,
     model_name: str,
-    person_conf: float,
-    person_nms: float,
+    p_conf: float,
+    p_nms: float,
     person_img_size: int,
     person_classes: Sequence[str],
-    ball_conf: float,
-    ball_nms: float,
+    b_conf: float,
+    b_nms: float,
     ball_img_size: int,
     ball_classes: Sequence[str],
     save_splits: bool = False,
@@ -1087,8 +1150,8 @@ def detect_two_pass(
         model,
         frames,
         person_img_size,
-        person_conf,
-        person_nms,
+        p_conf,
+        p_nms,
         set(person_classes),
         class_agnostic=not nms_class_aware,
     )
@@ -1096,8 +1159,8 @@ def detect_two_pass(
         model,
         frames,
         ball_img_size,
-        ball_conf,
-        ball_nms,
+        b_conf,
+        b_nms,
         set(ball_classes),
         class_agnostic=not nms_class_aware,
     )
@@ -1643,12 +1706,12 @@ def main(argv: Iterable[str] | None = None) -> None:
                     args.frames_dir,
                     args.output_json,
                     args.model,
-                    args.person_conf,
-                    args.person_nms,
+                    args.p_conf,
+                    args.p_nms,
                     args.person_img_size,
                     args.person_classes,
-                    args.ball_conf,
-                    args.ball_nms,
+                    args.b_conf,
+                    args.b_nms,
                     args.ball_img_size,
                     args.ball_classes,
                     args.save_splits,
