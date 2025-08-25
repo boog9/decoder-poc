@@ -133,6 +133,12 @@ def main() -> None:
     parser.add_argument("--smooth-alpha", type=float, default=0.3)
     args = parser.parse_args()
 
+    # Auto-fallback: switch to CPU if CUDA is unavailable
+    import torch, sys
+    if args.device == "cuda" and not torch.cuda.is_available():
+        print("| WARN | CUDA requested but not available; falling back to CPU.", file=sys.stderr)
+        args.device = "cpu"
+
     frames_dir = Path(args.frames_dir)
     out_path = Path(args.output_json)
 

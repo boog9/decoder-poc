@@ -1033,6 +1033,18 @@ docker run -i --rm -v "$(pwd)":/app --entrypoint python decoder-court:latest \
   tools/check_tcd_weights.py
 ```
 
+### Build images
+
+```bash
+# CPU (default)
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.court -t decoder-court:latest \
+  --build-arg TORCH_CHANNEL=cpu .
+
+# CUDA 12.1
+DOCKER_BUILDKIT=1 docker build -f Dockerfile.court -t decoder-court:cuda \
+  --build-arg TORCH_CHANNEL=cu121 .
+```
+
 ### Run inference
 
 ```bash
@@ -1040,6 +1052,17 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames \
   --output-json /app/court.json \
   --device cpu \
+  --weights /app/weights/tcd.pth \
+  --min-score 0.55 \
+  --sample-rate 4
+```
+
+GPU:
+```bash
+docker run --rm --gpus all -v "$(pwd)":/app decoder-court:cuda \
+  --frames-dir /app/frames \
+  --output-json /app/court.json \
+  --device cuda \
   --weights /app/weights/tcd.pth \
   --min-score 0.55 \
   --sample-rate 4

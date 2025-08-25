@@ -8,10 +8,23 @@ LABEL org.opencontainers.image.source="https://github.com/boog9/decoder-poc" \
 WORKDIR /app
 ENV PYTHONPATH=/app
 
+# === Select PyTorch variant ===
+# TORCH_CHANNEL: "cpu" (default) or "cu121" for CUDA 12.1
+ARG TORCH_CHANNEL=cpu
+ENV TORCH_CHANNEL=${TORCH_CHANNEL}
+
 # Install base and court detector dependencies
 COPY services/court_detector/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir pillow loguru \
-    && pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir pillow loguru opencv-python-headless numpy \
+ && if [ "$TORCH_CHANNEL" = "cu121" ]; then \
+      pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
+        torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 ; \
+    else \
+      pip install --no-cache-dir \
+        torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 ; \
+    fi \
+ && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Copy source and create weights directory
 COPY services/ /app/services/
