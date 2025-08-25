@@ -35,6 +35,7 @@ from .detect_objects import (
     _norm,
     _get_tlwh_from_track,
 )
+from .ball_kalman import BallKalmanFilter
 
 
 def make_byte_tracker(
@@ -375,14 +376,14 @@ def _is_identity_homography(h: List[List[float]]) -> bool:
 
 
 def _apply_homography(h: List[List[float]], x: float, y: float) -> Tuple[float, float]:
-    """Project ``(x, y)`` using homography ``h``."""
+    """Project ``(x, y)`` via homography ``h`` (3x3). Returns floats."""
 
     denom = h[2][0] * x + h[2][1] * y + h[2][2]
-    if abs(denom) < 1e-6:
-        return x, y
+    if abs(denom) < 1e-9:
+        return float(x), float(y)
     u = (h[0][0] * x + h[0][1] * y + h[0][2]) / denom
     v = (h[1][0] * x + h[1][1] * y + h[1][2]) / denom
-    return u, v
+    return float(u), float(v)
 
 
 def _pre_min_area_quantile(detections: List[dict], q: float) -> float:
@@ -720,6 +721,81 @@ def _refine_appearance(
     return tracks
 
 
+def _filter_ball_candidates(
+    dets: List[dict],
+    frame_w: float,
+    frame_h: float,
+    kf: BallKalmanFilter,
+    max_area_q: float,
+    max_aspect: float,
+    max_speed: float,
+    max_accel: float,
+    dt: float,
+    H: List[List[float]] | None = None,
+) -> List[dict]:
+    """Select and validate a single ball detection.
+
+    Args:
+        dets: Candidate detections for the current frame.
+        frame_w: Frame width in pixels.
+        frame_h: Frame height in pixels.
+        kf: Kalman filter instance tracking the ball centre.
+        max_area_q: Maximum box area as a fraction of frame area.
+        max_speed: Maximum speed in pixels per second.
+        max_accel: Maximum acceleration in pixels per second squared.
+        dt: Frame time step in seconds.
+        H: Optional homography for court-plane distances.
+
+    Returns:
+        List containing at most one validated detection.
+    """
+
+    max_area_px = max_area_q * frame_w * frame_h
+    valid: List[Tuple[dict, float, float]] = []
+    for det in dets:
+        x0, y0, x1, y1 = det["bbox"]
+        w = x1 - x0
+        h = y1 - y0
+        area = w * h
+        aspect = w / max(h, 1e-9)
+        if area > max_area_px or not (0.6 <= aspect <= max_aspect):
+            continue
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        if H is not None:
+            cx, cy = _apply_homography(H, cx, cy)
+        valid.append((det, cx, cy))
+    if not valid:
+        kf.predict()
+        return []
+
+    pred = kf.predict()
+    px, py = float(pred[0, 0]), float(pred[1, 0])
+    best_det: dict | None = None
+    best_c: tuple[float, float] | None = None
+    best_dist = float("inf")
+    for det, cx, cy in valid:
+        if kf.last_pos is not None and kf.last_vel is not None:
+            vx = (cx - kf.last_pos[0]) / dt
+            vy = (cy - kf.last_pos[1]) / dt
+            speed = math.hypot(vx, vy)
+            ax = (vx - kf.last_vel[0]) / dt
+            ay = (vy - kf.last_vel[1]) / dt
+            accel = math.hypot(ax, ay)
+            if speed > max_speed or accel > max_accel:
+                continue
+        dist = (px - cx) ** 2 + (py - cy) ** 2
+        if dist < best_dist:
+            best_det = det
+            best_c = (cx, cy)
+            best_dist = dist
+
+    if best_det is None or best_c is None:
+        return []
+    kf.update(best_c)
+    return [best_det]
+
+
 def track_detections(
     detections_json: Path,
     output_json: Path,
@@ -736,6 +812,9 @@ def track_detections(
     b_track_buffer: int,
     b_min_box_area: float,
     b_max_aspect_ratio: float,
+    ball_max_area_q: float,
+    ball_max_speed: float,
+    ball_max_accel: float,
     pre_nms_iou: float = 0.0,
     pre_min_area_q: float = 0.0,
     pre_topk: int = 0,
@@ -897,6 +976,7 @@ def track_detections(
     reuse: Dict[int, List[dict]] = {cid: [] for cid in trackers}
 
     out: List[dict] = []
+    ball_kf = BallKalmanFilter(1.0 / fps)
 
     for frame_id in sorted(frames):
         frame_w, frame_h = frame_sizes.get(frame_id, default_size or (0.0, 0.0))
@@ -918,17 +998,27 @@ def track_detections(
         for cls_id, tracker in trackers.items():
             dets = frames[frame_id].get(cls_id, [])
             if cls_id == CLASS_NAME_TO_ID["sports ball"]:
+                # Keep only by min area here; aspect/area/speed/accel gating is centralized in _filter_ball_candidates
                 dets = [
                     d
                     for d in dets
-                    if (d["bbox"][2] - d["bbox"][0]) * (d["bbox"][3] - d["bbox"][1])
-                    >= b_min_box_area
-                    and (
-                        (d["bbox"][2] - d["bbox"][0])
-                        / max(d["bbox"][3] - d["bbox"][1], 1e-3)
-                    )
-                    <= b_max_aspect_ratio
+                    if (d["bbox"][2] - d["bbox"][0]) * (d["bbox"][3] - d["bbox"][1]) >= b_min_box_area
                 ]
+                H = None
+                if assoc_plane == "court":
+                    H = homography_map.get(frame_id)
+                dets = _filter_ball_candidates(
+                    dets,
+                    frame_w,
+                    frame_h,
+                    ball_kf,
+                    ball_max_area_q,
+                    b_max_aspect_ratio,
+                    ball_max_speed,
+                    ball_max_accel,
+                    1.0 / fps,
+                    H,
+                )
             else:
                 n_start = len(dets)
                 if pre_nms_iou > 0:

@@ -14,12 +14,8 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
+import sys, types, contextlib, builtins, json
 from pathlib import Path
-import sys
-import types
-import builtins
 
 
 class _DummyTqdm:
@@ -43,13 +39,21 @@ loguru_mod.logger = types.SimpleNamespace(
 sys.modules.setdefault("loguru", loguru_mod)
 sys.modules.setdefault("scipy", types.ModuleType("scipy"))
 sys.modules.setdefault("scipy.optimize", types.ModuleType("scipy.optimize")).linear_sum_assignment = lambda *a, **k: ([], [])
+
+# 1) Ensure import of BallKalmanFilter on real NumPy
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.ball_kalman import BallKalmanFilter  # noqa: F401
+
+# 2) Now mock lightweight NumPy for other paths
 np_mod = types.ModuleType("numpy")
 np_mod.array = lambda a, dtype=None: a
 np_mod.asarray = lambda a, dtype=None: a
 np_mod.concatenate = lambda arrs, axis=0: sum(arrs, [])
 np_mod.float32 = "float32"
 np_mod.int32 = int
-sys.modules.setdefault("numpy", np_mod)
+np_mod.eye = lambda n, dtype=None: [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+np_mod.linalg = types.SimpleNamespace(inv=lambda m: m)
+sys.modules["numpy"] = np_mod
 torch_mod = types.ModuleType("torch")
 torch_mod.cuda = types.SimpleNamespace(is_available=lambda: True)
 torch_mod.no_grad = contextlib.nullcontext
@@ -57,7 +61,6 @@ sys.modules.setdefault("torch", torch_mod)
 sys.modules.setdefault("torch.cuda", torch_mod.cuda)
 sys.modules.setdefault("yolox", types.ModuleType("yolox"))
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import src.track_objects as tob  # noqa: E402
 from src.utils.classes import CLASS_NAME_TO_ID  # noqa: E402
 
@@ -288,6 +291,16 @@ def test_smooth_none_leaves_tracks_unchanged() -> None:
     before = json.loads(json.dumps(tracks))
     after = tob._smooth_tracks(tracks, method="none", alpha=0.5, window=3)
     assert after == before
+
+
+def test_filter_ball_candidates() -> None:
+    from src.ball_kalman import BallKalmanFilter
+
+    kf = BallKalmanFilter(1.0)
+    dets = [{"bbox": [0, 0, 100, 50]}, {"bbox": [0, 0, 10, 10]}]
+    res = tob._filter_ball_candidates(dets, 200, 100, kf, 0.1, 1.7, 180, 120, 1.0)
+    assert len(res) == 1
+    assert res[0]["bbox"] == [0, 0, 10, 10]
 
 
 def test_appearance_refine_warns_when_missing_libs(monkeypatch, tmp_path: Path) -> None:

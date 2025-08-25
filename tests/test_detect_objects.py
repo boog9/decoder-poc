@@ -117,6 +117,27 @@ def test_parse_args_custom_classes() -> None:
     assert args.classes == [1, 2]
 
 
+def test_parse_args_ball_limits() -> None:
+    args = dobj.parse_args(
+        [
+            "track",
+            "--detections-json",
+            "d.json",
+            "--output-json",
+            "o.json",
+            "--ball-max-area-q",
+            "0.01",
+            "--ball-max-speed",
+            "150",
+            "--ball-max-accel",
+            "100",
+        ]
+    )
+    assert args.ball_max_area_q == 0.01
+    assert args.ball_max_speed == 150
+    assert args.ball_max_accel == 100
+
+
 def test_merge_detections_merges() -> None:
     a = [{"frame": "f1", "detections": [1]}, {"frame": "f2", "detections": [2]}]
     b = [{"frame": "f1", "detections": [3]}, {"frame": "f2", "detections": [4]}]
