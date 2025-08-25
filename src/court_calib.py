@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,12 +43,18 @@ def ema_poly(prev: Optional[np.ndarray], cur: np.ndarray, alpha: float) -> np.nd
     return (1.0 - alpha) * prev + alpha * cur
 
 
-def box_from_heatmaps(hm: torch.Tensor, thr: float = 0.0) -> Tuple[np.ndarray, float]:
+def box_from_heatmaps(
+    hm: torch.Tensor,
+    mask_thr: float = 0.30,
+    score_metric: str = "max",  # 'max' | 'mean' | 'area' | 'auto'
+) -> Tuple[np.ndarray, float]:
     """Return polygon and score from raw heatmaps.
 
     Args:
         hm: Heatmaps of shape ``[1, 15, 360, 640]``.
-        thr: Optional absolute threshold.
+        mask_thr: Threshold on normalized heatmaps for contour masking.
+        score_metric: Aggregation metric for score; one of ``"max"``, ``"mean"``,
+            ``"area"`` or ``"auto"``.
 
     Returns:
         ``(polygon, score)`` where polygon is ``[4, 2]`` in 640×360 coords and
@@ -59,9 +64,24 @@ def box_from_heatmaps(hm: torch.Tensor, thr: float = 0.0) -> Tuple[np.ndarray, f
     with torch.no_grad():
         act = hm.clamp_min(0).sum(dim=1, keepdim=True)
         act_np = act.squeeze().cpu().numpy()
-        score = float(act_np.mean())
-        t = act_np.mean() if thr <= 0 else thr
-        mask = (act_np > t).astype(np.uint8)
+        q = float(np.quantile(act_np, 0.999))
+        denom = q if q > 1e-6 else float(act_np.max() if act_np.max() > 0 else 1.0)
+        act_norm = (act_np / denom).clip(0.0, 1.0)
+
+        s_mean = float(act_norm.mean())
+        s_max = float(act_norm.max())
+        area_frac = float((act_norm > mask_thr).mean())
+
+        if score_metric == "mean":
+            score = s_mean
+        elif score_metric == "area":
+            score = area_frac
+        elif score_metric == "auto":
+            score = 0.4 * s_max + 0.4 * s_mean + 0.2 * area_frac
+        else:  # "max" (default)
+            score = s_max
+
+        mask = (act_norm > mask_thr).astype(np.uint8)
         kernel_open = np.ones((5, 5), np.uint8)
         kernel_close = np.ones((9, 9), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
@@ -78,7 +98,10 @@ def box_from_heatmaps(hm: torch.Tensor, thr: float = 0.0) -> Tuple[np.ndarray, f
 def build_model(weights_path: str, device: str) -> torch.nn.Module:
     """Build a dynamic court detector from a checkpoint."""
 
-    sd_raw = torch.load(weights_path, map_location="cpu")
+    try:
+        sd_raw = torch.load(weights_path, map_location="cpu", weights_only=True)  # PyTorch 2.4+
+    except TypeError:
+        sd_raw = torch.load(weights_path, map_location="cpu")
     sd = sd_raw.get("state_dict", sd_raw) if isinstance(sd_raw, dict) else sd_raw
     model = TennisCourtDetectorFromSD(sd)
     info = model.load_state_dict(sd, strict=False)
@@ -126,15 +149,33 @@ def main() -> None:
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--sample-rate", "--stride", dest="sample_rate", type=int, default=1)
     parser.add_argument("--min-score", type=float, default=0.55)
-    parser.add_argument("--allow-placeholder", action="store_true")
-    parser.add_argument("--no-allow-placeholder", dest="allow_placeholder", action="store_false")
-    parser.set_defaults(allow_placeholder=True)
+    parser.add_argument(
+        "--mask-thr",
+        type=float,
+        default=0.30,
+        help="threshold for mask on normalized heatmaps [0..1]",
+    )
+    parser.add_argument(
+        "--score-metric",
+        choices=["max", "mean", "area", "auto"],
+        default="max",
+    )
+    parser.add_argument(
+        "--fallback",
+        choices=["last", "full", "detect"],
+        default="last",
+        help=(
+            "what polygon to use when score < min-score (and mark placeholder): "
+            "'last' = last valid polygon if any else full-frame; "
+            "'full' = full-frame; "
+            "'detect' = use detected polygon even if low-confidence"
+        ),
+    )
     parser.add_argument("--smooth", choices=["none", "ema"], default="none")
     parser.add_argument("--smooth-alpha", type=float, default=0.3)
     args = parser.parse_args()
 
     # Auto-fallback: switch to CPU if CUDA is unavailable
-    import torch, sys
     if args.device == "cuda" and not torch.cuda.is_available():
         print("| WARN | CUDA requested but not available; falling back to CPU.", file=sys.stderr)
         args.device = "cpu"
@@ -153,7 +194,8 @@ def main() -> None:
         raise SystemExit(f"No frames in {frames_dir}")
 
     results: List[Dict[str, Any]] = []
-    prev_poly: Optional[np.ndarray] = None
+    prev_poly: Optional[np.ndarray] = None  # EMA smoothing in 640x360
+    last_valid_poly: Optional[List[List[float]]] = None  # original frame coords
 
     for idx, fp in enumerate(frames):
         if idx % max(1, args.sample_rate) != 0:
@@ -165,6 +207,7 @@ def main() -> None:
                         "lines": {},
                         "homography": identity_h(),
                         "score": results[-1]["score"],
+                        "source": results[-1].get("source", "full"),
                         "placeholder": True,
                     }
                 )
@@ -179,6 +222,7 @@ def main() -> None:
                         "lines": {},
                         "homography": identity_h(),
                         "score": 0.0,
+                        "source": "full",
                         "placeholder": True,
                     }
                 )
@@ -191,43 +235,60 @@ def main() -> None:
         ten = preprocess_to_640x360(img0).to(args.device)
         with torch.no_grad():
             hm = model(ten)
-        poly640, score = box_from_heatmaps(hm)
+        poly640, score = box_from_heatmaps(hm, args.mask_thr, args.score_metric)
         if args.smooth == "ema":
             poly640 = ema_poly(prev_poly, poly640, args.smooth_alpha)
         prev_poly = poly640.copy()
 
-        if score < args.min_score and not args.allow_placeholder:
+        if score < args.min_score:
+            # low-confidence: choose fallback polygon
+            if args.fallback == "detect":
+                poly_out = scale_poly(poly640, w0, h0)
+                src = "detect"
+            elif args.fallback == "last" and last_valid_poly is not None:
+                poly_out = last_valid_poly
+                src = "last"
+            else:  # "full" or no last valid polygon
+                poly_out = [
+                    [0.0, 0.0],
+                    [float(w0), 0.0],
+                    [float(w0), float(h0)],
+                    [0.0, float(h0)],
+                ]
+                src = "full"
             results.append(
                 {
                     "frame": fp.name,
-                    "polygon": [[0.0, 0.0], [float(w0), 0.0], [float(w0), float(h0)], [0.0, float(h0)]],
+                    "polygon": poly_out,
                     "lines": {},
                     "homography": identity_h(),
                     "score": float(score),
+                    "source": src,
                     "placeholder": True,
                 }
             )
         else:
+            # valid detection
+            poly_out = scale_poly(poly640, w0, h0)
+            last_valid_poly = poly_out
             results.append(
                 {
                     "frame": fp.name,
-                    "polygon": scale_poly(poly640, w0, h0),
+                    "polygon": poly_out,
                     "lines": {},
                     "homography": identity_h(),
                     "score": float(score),
-                    "placeholder": False if score >= args.min_score else True,
+                    "source": "detect",
+                    "placeholder": False,
                 }
             )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f)
-    print(
-        f"| INFO | valid court frames: {len(results)}/{len(frames)}",
-        file=sys.stderr,
-    )
+    valid = sum(1 for r in results if not r.get("placeholder", True))
+    print(f"| INFO | valid court frames: {valid}/{len(frames)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
     main()
-
