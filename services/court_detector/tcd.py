@@ -9,11 +9,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Lightweight TennisCourtDetector model builder.
+"""Minimal TennisCourtDetector model builder.
 
-This module provides a minimal neural network architecture that is compatible
-with state-dict checkpoints using ``convN.block.*`` naming. The implementation
-is intentionally simple and serves as a placeholder for the production model.
+This module exposes a tiny convolutional network compatible with
+``convN.block.*``-style state-dict checkpoints. The implementation serves as a
+placeholder; replace with the production architecture as needed.
 """
 
 from __future__ import annotations
@@ -25,13 +25,12 @@ from torch import nn
 
 
 class ConvBlock(nn.Module):
-    """Simple convolutional block used in :class:`TCDNet`."""
+    """Simple convolutional block."""
 
     def __init__(self, in_ch: int, out_ch: int) -> None:
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.BatchNorm2d(out_ch),
+            nn.Conv2d(in_ch, out_ch, 3, padding=1, bias=True),
             nn.ReLU(inplace=True),
         )
 
@@ -40,46 +39,38 @@ class ConvBlock(nn.Module):
 
 
 class TCDNet(nn.Module):
-    """Tiny convolutional network producing court geometry placeholders."""
+    """Very small network producing court placeholders."""
 
-    def __init__(self) -> None:
+    def __init__(self, base_channels: int = 16) -> None:
         super().__init__()
-        self.conv1 = ConvBlock(3, 16)
-        self.conv2 = ConvBlock(16, 32)
-        self.conv3 = ConvBlock(32, 64)
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(64, 128)
-        self.out_poly = nn.Linear(128, 8)
-        self.out_h = nn.Linear(128, 9)
-        self.out_score = nn.Linear(128, 1)
+        c1, c2, c3 = base_channels, base_channels, base_channels * 2
+        self.conv1 = ConvBlock(3, c1)
+        self.conv2 = ConvBlock(c1, c2)
+        self.conv3 = ConvBlock(c2, c3)
+        # TODO: add remaining layers and heads matching the real checkpoint
 
     def forward(self, x: torch.Tensor) -> Dict[str, Any]:
         x = self.conv1(x)
         x = self.conv2(x)
         x = self.conv3(x)
-        x = self.pool(x).view(x.size(0), -1)
-        x = torch.relu(self.fc(x))
-        poly = torch.sigmoid(self.out_poly(x)).view(-1, 4, 2)[0]
-        H_raw = self.out_h(x).view(-1, 3, 3)[0]
-        H = torch.eye(3, device=H_raw.device) + 0.05 * H_raw
-        score = torch.sigmoid(self.out_score(x))[0, 0]
-        poly = poly.tolist()
-        H = H.tolist()
-        score = float(score.item())
-        return {"polygon": poly, "homography": H, "lines": {}, "score": score}
-
-    # The default ``load_state_dict`` is retained; any mismatched keys will be
-    # ignored when ``strict=False`` is used by the loader.
+        # TODO: head/decoder according to actual checkpoint
+        polygon = [[0, 0], [1, 0], [1, 1], [0, 1]]
+        return {
+            "polygon": polygon,
+            "lines": {},
+            "homography": None,
+            "score": 1.0,
+        }
 
 
-def build_tcd_model() -> nn.Module:
-    """Create and return the TennisCourtDetector network.
+def build_tcd_model(base_channels: int = 64) -> TCDNet:
+    """Construct a ``TCDNet`` instance.
 
-    Returns
-    -------
-    nn.Module
-        Uninitialized detector network.
+    Args:
+        base_channels: Width multiplier for the first conv layer.
+
+    Returns:
+        Uninitialized ``TCDNet`` model.
     """
 
-    return TCDNet()
-
+    return TCDNet(base_channels=base_channels)

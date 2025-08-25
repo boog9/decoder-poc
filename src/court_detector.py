@@ -25,11 +25,8 @@ _model_weights: Optional[Path] = None
 _logged_output_type = False
 
 
-def _maybe_import_external_builder() -> Optional[Callable[[], Any]]:
-    """Try to import a model builder from ``services.court_detector``.
-
-    Returns ``None`` if no external builder is available.
-    """
+def _maybe_import_external_builder() -> Optional[Callable[..., Any]]:
+    """Try to import a model builder from ``services.court_detector``."""
 
     try:  # Variant 1
         from services.court_detector.model import build as ext_build  # type: ignore
@@ -62,9 +59,10 @@ def _get_model(device: str, weights: Path, weights_type: str) -> Any:
 
     import torch  # pragma: no cover - heavy dependency
 
-    logger.info(
-        "loading court detector (%s) from %s on %s", weights_type, weights, device
-    )
+    # fmt: off
+    logger.info("loading court detector ({}) from {} on {}", weights_type, weights, device)
+    # fmt: on
+
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError(
             "CUDA requested but not available. Use --device cpu or rebuild with CUDA base image."
@@ -73,18 +71,52 @@ def _get_model(device: str, weights: Path, weights_type: str) -> Any:
     if weights_type == "jit":
         _model = torch.jit.load(str(weights), map_location=device).eval()
     else:
+        # 1) читаємо чекпойнт і готуємо sd
         state = torch.load(str(weights), map_location="cpu")
+        sd = state.get("state_dict", state) if isinstance(state, dict) else state
+
+        # 2) інференс базової ширини з першого шару (для tcd.pth це 64)
+        try:
+            base_ch = int(sd["conv1.block.0.weight"].shape[0])
+        except Exception:
+            base_ch = 16  # дефолт на випадок нестандартного ckpt
+
+        # 3) будуємо мережу через external builder (якщо є) або fallback
         builder = _maybe_import_external_builder() or build_tcd_model
-        net = builder()
-        if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
-            state = state["state_dict"]
-        info = net.load_state_dict(state, strict=False)
+
+        import inspect
+
+        sig = inspect.signature(builder)
+        kwargs = {}
+        for name in ("base_channels", "base_ch"):
+            if name in sig.parameters:
+                kwargs[name] = base_ch
+                break
+        net = builder(**kwargs) if kwargs else builder()
+
+        # 4) shape-guard: залишаємо лише ті ваги, де форма збігається (страховка)
+        model_sd = net.state_dict()
+        sd_compatible = {
+            k: v
+            for k, v in sd.items()
+            if k in model_sd and v.shape == model_sd[k].shape
+        }
+        dropped = sorted(set(sd.keys()) - set(sd_compatible.keys()))
+        if dropped:
+            logger.warning(
+                "Dropped {} keys due to shape mismatch: {}", len(dropped), dropped[:10]
+            )
+
+        info = net.load_state_dict(sd_compatible, strict=False)
         missing = getattr(info, "missing_keys", [])
         unexpected = getattr(info, "unexpected_keys", [])
-        if missing or unexpected:
-            logger.warning(
-                "state_dict load: missing=%d, unexpected=%d", len(missing), len(unexpected)
-            )
+        logger.info(
+            "state_dict load (base_channels={}): missing={}, unexpected={}",
+            base_ch,
+            len(missing),
+            len(unexpected),
+        )
+
         net.to(device).eval()
         _model = net
 
@@ -140,22 +172,26 @@ def detect_single_frame(
 
     global _logged_output_type
     if not _logged_output_type:
-        logger.debug("detector output type: %s", type(raw).__name__)
+        logger.debug("detector output type: {}", type(raw).__name__)
         _logged_output_type = True
 
     if isinstance(raw, (list, tuple)):
         raw = raw[0]
     if not isinstance(raw, dict):  # pragma: no cover - unexpected output
-        logger.error("unexpected detector output: %r", type(raw).__name__)
+        logger.error("unexpected detector output: {}", type(raw).__name__)
         return {}
 
     polygon = raw.get("polygon") or raw.get("court_polygon") or []
     lines = raw.get("lines") or raw.get("court_lines") or {}
-    homography = raw.get("homography") or raw.get("H") or [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ]
+    homography = (
+        raw.get("homography")
+        or raw.get("H")
+        or [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
     score = float(raw.get("score", 0.0))
     if score < min_score or not polygon:
         return {}
