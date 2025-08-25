@@ -17,7 +17,10 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
+import shlex
+import shutil
 import subprocess
 from collections import defaultdict
 from pathlib import Path
@@ -658,102 +661,116 @@ def _draw_overlay(
     return written
 
 
-def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
-    """Export frames in ``output_dir`` to an MP4 using the ffmpeg image2 demuxer.
+def _run_command(cmd: List[str]) -> None:
+    """Run a subprocess command with logging and error handling.
 
-    To guarantee ordering, stage symlinks as ``000001.png``, ``000002.png``, ...
-    The function attempts to use ``libx264`` and gracefully falls back when the
-    codec or CRF flag is unavailable.
+    Args:
+        cmd: Command tokens.
+
+    Raises:
+        RuntimeError: If the command exits with a non-zero status.
     """
+    LOGGER.info("Running: %s", shlex.join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "") + (proc.stdout or "")
+        snippet = "\n".join(stderr.splitlines()[:40])
+        raise RuntimeError(f"Command failed ({proc.returncode}):\n{snippet}")
 
-    import subprocess, shlex, sys  # noqa: F401
 
+def _stage_frames(output_dir: Path) -> Path:
+    """Create numbered symlinks for ffmpeg export.
+
+    Args:
+        output_dir: Directory containing frame images.
+
+    Returns:
+        Path to staging directory with numbered symlinks.
+    """
     exts = {".png", ".jpg", ".jpeg"}
     files = sorted(f for f in output_dir.iterdir() if f.suffix.lower() in exts)
-    if not files:
-        LOGGER.warning("No frames to export at %s", output_dir)
-        return
-    tmp = output_dir / "_mp4_stage"
-    if tmp.exists():
-        for g in tmp.iterdir():
-            try:
-                g.unlink()
-            except Exception:
-                pass
-    tmp.mkdir(exist_ok=True)
-    for i, f in enumerate(files, start=1):
-        link = tmp / f"{i:06d}.png"
+    stage_dir = output_dir / "_mp4_stage"
+    stage_dir.mkdir(exist_ok=True)
+    for entry in stage_dir.iterdir():
         try:
-            link.symlink_to(f)
+            entry.unlink()
+        except Exception:
+            pass
+    for i, src in enumerate(files, start=1):
+        link = stage_dir / f"{i:06d}.png"
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        rel = os.path.relpath(src, start=stage_dir)
+        try:
+            link.symlink_to(rel)
         except (OSError, NotImplementedError):
             try:
-                link.hardlink_to(f)
+                link.hardlink_to(src)
             except Exception:
-                import shutil
+                shutil.copyfile(src, link)
+    return stage_dir
 
-                shutil.copyfile(f, link)
 
-    pattern = str(tmp / "%06d.png")
+def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
+    """Export frames in ``output_dir`` to an MP4 using ffmpeg.
+
+    Symlinks are staged in ``_mp4_stage`` to guarantee ordering. The function
+    prefers ``libx264`` and falls back to ``h264_nvenc`` or ``mpeg4`` when the
+    preferred codec is unavailable.
+    """
+    stage_dir = _stage_frames(output_dir)
+    if not any(stage_dir.iterdir()):
+        LOGGER.warning("No frames to export at %s", output_dir)
+        return
+    pattern = str(stage_dir / "*.png")
     base = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
-        "error",
+        "warning",
         "-y",
         "-framerate",
         str(fps),
-        "-f",
-        "image2",
+        "-pattern_type",
+        "glob",
         "-i",
         pattern,
     ]
 
-    cmd = base + ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
-    if crf is not None and crf >= 0:
-        cmd += ["-crf", str(crf)]
-    cmd += [str(mp4_path)]
-
-    def run(cmd_list: List[str]) -> subprocess.CompletedProcess[str]:
-        LOGGER.debug("Running: %s", shlex.join(cmd_list))
-        return subprocess.run(cmd_list, check=True, capture_output=True, text=True)
-
-    try:
-        run(cmd)
-        return
-    except subprocess.CalledProcessError as e:
-        err = (e.stderr or "") + (e.stdout or "")
-
-        if "Unrecognized option 'crf'" in err or "Error setting option crf" in err:
-            cmd_no_crf = [c for c in cmd if c not in ("-crf", str(crf))]
+    has_x264 = (
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-h", "encoder=libx264"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
+    codec_cmd: List[str]
+    if has_x264:
+        codec = "libx264"
+        codec_cmd = ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+        if crf is not None and crf >= 0:
+            codec_cmd += ["-crf", str(crf)]
+    else:
+        has_nvenc = (
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-h", "encoder=h264_nvenc"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            == 0
+        )
+        if has_nvenc:
+            codec = "h264_nvenc"
+            codec_cmd = ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p"]
             if crf is not None and crf >= 0:
-                try:
-                    cmd_x264_params: List[str] = []
-                    skip = False
-                    for i, c in enumerate(cmd_no_crf):
-                        if skip:
-                            skip = False
-                            continue
-                        if c == "-c:v" and i + 1 < len(cmd_no_crf) and cmd_no_crf[i + 1] == "libx264":
-                            cmd_x264_params.extend([c, "libx264", "-x264-params", f"crf={crf}"])
-                            skip = True
-                        else:
-                            cmd_x264_params.append(c)
-                    run(cmd_x264_params)
-                    return
-                except subprocess.CalledProcessError:
-                    pass
-            try:
-                run(cmd_no_crf)
-                return
-            except subprocess.CalledProcessError as e2:
-                err = (e2.stderr or "") + (e2.stdout or "")
-
-        if "Unknown encoder 'libx264'" in err or "Encoder (codec libx264) not found" in err:
-            cmd_mpeg4 = base + ["-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p", str(mp4_path)]
-            run(cmd_mpeg4)
-            return
-
-        raise
+                codec_cmd += ["-crf", str(crf)]
+        else:
+            codec = "mpeg4"
+            codec_cmd = ["-c:v", "mpeg4", "-qscale:v", "2", "-pix_fmt", "yuv420p"]
+    LOGGER.info("Using codec %s for MP4 export", codec)
+    cmd = base + codec_cmd + [str(mp4_path)]
+    _run_command(cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -827,7 +844,11 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--end", type=int, default=-1, help="End frame index (-1 = last)"
     )
-    parser.add_argument("--export-mp4", type=Path, help="Optional MP4 export path")
+    parser.add_argument(
+        "--export-mp4",
+        type=str,
+        help="Optional MP4 export path or full ffmpeg command",
+    )
     parser.add_argument("--fps", type=int, default=25, help="FPS for MP4 export")
     parser.add_argument(
         "--crf",
@@ -955,10 +976,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         LOGGER.warning("No overlays were drawn. Adjust filters or verify input files.")
     if written and args.export_mp4:
         try:
-            _export_mp4(args.output_dir, args.export_mp4, args.fps, args.crf)
-        except (
-            subprocess.CalledProcessError
-        ) as exc:  # pragma: no cover - ffmpeg failure
+            val = args.export_mp4
+            if val.strip().startswith("ffmpeg"):
+                _run_command(shlex.split(val))
+            else:
+                _export_mp4(args.output_dir, Path(val), args.fps, args.crf)
+        except RuntimeError as exc:  # pragma: no cover - ffmpeg failure
             LOGGER.error("ffmpeg failed: %s", exc)
             return 1
     return 0 if written else 1
