@@ -11,3 +11,6 @@
 # limitations under the License.
 """Tennis court detector service package."""
 
+from .tcd import build_tcd_model
+
+__all__ = ["build_tcd_model"]

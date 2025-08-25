@@ -23,7 +23,10 @@ import src.court_detector as cd
 def test_detect_single_frame_state_dict(monkeypatch) -> None:
     """Wrapper loads state_dict weights and returns detection keys."""
 
+    from types import SimpleNamespace
+
     called = {}
+    tensor_stub = SimpleNamespace(shape=(64, 3, 3, 3))
 
     class DummyNet:
         def eval(self):
@@ -32,9 +35,14 @@ def test_detect_single_frame_state_dict(monkeypatch) -> None:
         def to(self, device: str):
             return self
 
-        def load_state_dict(self, state, strict: bool = False):  # pragma: no cover - simple mock
+        def load_state_dict(
+            self, state, strict: bool = False
+        ):  # pragma: no cover - simple mock
             called["state"] = state
-            return self
+            return SimpleNamespace(missing_keys=[], unexpected_keys=[])
+
+        def state_dict(self):  # pragma: no cover - simple mock
+            return {"conv1.block.0.weight": tensor_stub}
 
         def __call__(self, x):  # pragma: no cover - simple forward
             called["x"] = x
@@ -48,13 +56,25 @@ def test_detect_single_frame_state_dict(monkeypatch) -> None:
     monkeypatch.setattr(cd, "_model", None, raising=False)
     monkeypatch.setattr(cd, "_model_device", None, raising=False)
     monkeypatch.setattr(cd, "_model_weights", None, raising=False)
-    monkeypatch.setattr(cd, "_maybe_import_external_builder", lambda: lambda: DummyNet())
+    monkeypatch.setattr(
+        cd,
+        "_maybe_import_external_builder",
+        lambda: lambda base_channels=64: DummyNet(),
+    )
     import src.utils.checkpoint as ck
+
     monkeypatch.setattr(ck, "verify_torch_ckpt", lambda p: "state_dict")
     import torch
 
-    monkeypatch.setattr(torch, "load", lambda *a, **k: {"w": 1}, raising=False)
+    monkeypatch.setattr(
+        torch,
+        "load",
+        lambda *a, **k: {"conv1.block.0.weight": tensor_stub},
+        raising=False,
+    )
 
     img = Image.new("RGB", (8, 8))
-    out = cd.detect_single_frame(img, device="cpu", weights=Path("w.pth"), min_score=0.5)
+    out = cd.detect_single_frame(
+        img, device="cpu", weights=Path("w.pth"), min_score=0.5
+    )
     assert "polygon" in out and out["score"] >= 0.5

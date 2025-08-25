@@ -1014,5 +1014,28 @@ ffmpeg with libx264.
 
 # 5) sanity metrics
 docker run --rm -v "$(pwd)":/app decoder-track:latest \
-  python tools/verify_tennis_defaults.py --tracks-json /app/tracks.json
+python tools/verify_tennis_defaults.py --tracks-json /app/tracks.json
+```
+### Model weights (TCD, 64-channel)
+
+* File: `weights/tcd.pth` (width check):
+
+```bash
+python - <<'PY'
+import torch; sd=torch.load('weights/tcd.pth','cpu'); sd=sd.get('state_dict',sd) if isinstance(sd,dict) else sd
+print('base_channels =', sd['conv1.block.0.weight'].shape[0])  # should print 64
+PY
+```
+
+* The loader infers `base_channels` from the checkpoint and builds the matching model.
+* Sample execution:
+
+```bash
+docker run --rm -v "$(pwd)":/app decoder-court:latest \
+  --frames-dir  /app/frames \
+  --output-json /app/court.json \
+  --device cpu \
+  --weights /app/weights/tcd.pth \
+  --sample-rate 3 \
+  --min-score 0.25
 ```
