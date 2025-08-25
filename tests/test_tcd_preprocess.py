@@ -24,5 +24,5 @@ def test_preprocess_shape_and_range() -> None:
     img = np.zeros((100, 200, 3), dtype=np.uint8)
     tensor = preprocess_to_640x360(img)
     assert tensor.shape == (1, 3, 360, 640)
-    assert tensor.dtype.name == "float32"
+    assert str(tensor.dtype) == "torch.float32"
     assert tensor.min().item() == 0.0 and tensor.max().item() == 0.0
