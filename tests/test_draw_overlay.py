@@ -396,44 +396,47 @@ def test_export_mp4_skips_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     frame.write_bytes(b"0")
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str]) -> None:
+    def fake_try(cmd: list[str]) -> tuple[int, str, str]:
         calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"0")
+        return 0, "", ""
 
-    def fake_check(*a, **k):
-        return types.SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(dov, "_run_command", fake_run)
-    monkeypatch.setattr(dov.subprocess, "run", fake_check)
+    monkeypatch.setattr(dov, "_ffmpeg_try", fake_try)
     mp4 = tmp_path / "out.mp4"
     dov._export_mp4(tmp_path, mp4, 25, -1)
     assert calls
     assert "-crf" not in calls[0]
+    assert "-x264-params" not in calls[0]
+    assert "-qp" not in calls[0]
+    assert mp4.exists()
 
 
 def test_export_mp4_fallback_no_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     frame = tmp_path / "frame_000001.png"
     frame.write_bytes(b"0")
     calls: list[list[str]] = []
+    responses = [
+        (1, "", "Unknown encoder 'libx264'"),
+        (1, "", "Unknown encoder 'h264_nvenc'"),
+        (0, "", ""),
+    ]
 
-    def fake_command(cmd: list[str]) -> None:
+    def fake_try(cmd: list[str]) -> tuple[int, str, str]:
         calls.append(cmd)
+        code, out, err = responses.pop(0)
+        if code == 0:
+            Path(cmd[-1]).write_bytes(b"0")
+        return code, out, err
 
-    def fake_run(args, stdout=None, stderr=None, capture_output=False, text=False):
-        arg_list = args if isinstance(args, list) else []
-        if "encoder=libx264" in arg_list:
-            return types.SimpleNamespace(returncode=1)
-        if "encoder=h264_nvenc" in arg_list:
-            return types.SimpleNamespace(returncode=1)
-        return types.SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(dov, "_run_command", fake_command)
-    monkeypatch.setattr(dov.subprocess, "run", fake_run)
+    monkeypatch.setattr(dov, "_ffmpeg_try", fake_try)
     mp4 = tmp_path / "out.mp4"
     dov._export_mp4(tmp_path, mp4, 25, 23)
+    assert mp4.exists()
     assert calls
-    cmd = calls[0]
+    cmd = calls[-1]
     assert "mpeg4" in cmd
-    assert "-crf" not in cmd
+    assert "-qscale:v" in cmd
+    assert not any(opt in cmd for opt in ["-crf", "-x264-params", "-qp"])
 
 def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     frames = tmp_path / "frames"

@@ -22,6 +22,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import glob
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -711,66 +712,137 @@ def _stage_frames(output_dir: Path) -> Path:
     return stage_dir
 
 
-def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
-    """Export frames in ``output_dir`` to an MP4 using ffmpeg.
+def _ffmpeg_try(cmd: List[str]) -> Tuple[int, str, str]:
+    """Execute ``cmd`` and return ``(code, stdout, stderr)``."""
+    try:
+        proc = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - ffmpeg missing
+        return 127, "", str(exc)
+    return proc.returncode, proc.stdout, proc.stderr
 
-    Symlinks are staged in ``_mp4_stage`` to guarantee ordering. The function
-    prefers ``libx264`` and falls back to ``h264_nvenc`` or ``mpeg4`` when the
-    preferred codec is unavailable.
+
+def _encode_mp4(stage_dir: Path, out_path: Path, fps: int, crf_val: int) -> None:
+    """Encode ``stage_dir`` PNG frames into ``out_path``.
+
+    The function attempts ``libx264`` first and progressively falls back to
+    alternative rate-control modes and codecs.
     """
-    stage_dir = _stage_frames(output_dir)
-    if not any(stage_dir.iterdir()):
-        LOGGER.warning("No frames to export at %s", output_dir)
-        return
-    pattern = str(stage_dir / "*.png")
+
+    pngs = glob.glob(os.path.join(stage_dir, "*.png"))
+    if not pngs:
+        raise RuntimeError(f"No PNG frames in {stage_dir}")
+
     base = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
         "warning",
+        "-nostdin",
         "-y",
         "-framerate",
         str(fps),
         "-pattern_type",
         "glob",
         "-i",
-        pattern,
+        os.path.join(stage_dir, "*.png"),
     ]
 
-    has_x264 = (
-        subprocess.run(
-            ["ffmpeg", "-hide_banner", "-h", "encoder=libx264"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode
-        == 0
-    )
-    codec_cmd: List[str]
-    if has_x264:
-        codec = "libx264"
-        codec_cmd = ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
-        if crf is not None and crf >= 0:
-            codec_cmd += ["-crf", str(crf)]
-    else:
-        has_nvenc = (
-            subprocess.run(
-                ["ffmpeg", "-hide_banner", "-h", "encoder=h264_nvenc"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            ).returncode
-            == 0
+    def run(codec: str, rc_args: List[str]) -> bool | str:
+        tmp_out = str(out_path) + ".tmp"
+        cmd = (
+            base
+            + ["-c:v", codec]
+            + rc_args
+            + ["-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp_out]
         )
-        if has_nvenc:
-            codec = "h264_nvenc"
-            codec_cmd = ["-c:v", "h264_nvenc", "-pix_fmt", "yuv420p"]
-            if crf is not None and crf >= 0:
-                codec_cmd += ["-crf", str(crf)]
-        else:
-            codec = "mpeg4"
-            codec_cmd = ["-c:v", "mpeg4", "-qscale:v", "2", "-pix_fmt", "yuv420p"]
-    LOGGER.info("Using codec %s for MP4 export", codec)
-    cmd = base + codec_cmd + [str(mp4_path)]
-    _run_command(cmd)
+        print("[INFO] Running:", " ".join(shlex.quote(x) for x in cmd))
+        code, _stdout, stderr = _ffmpeg_try(cmd)
+        if code == 0:
+            try:
+                os.replace(tmp_out, out_path)
+            except FileNotFoundError:  # pragma: no cover - odd ffmpeg success
+                raise RuntimeError(
+                    "FFmpeg reported success but no output file was produced."
+                )
+            print(
+                f"[INFO] Exported MP4: {out_path} ({len(pngs)} frames @ {fps} fps)"
+            )
+            return True
+        if os.path.exists(tmp_out):
+            try:
+                os.remove(tmp_out)
+            except OSError:
+                pass
+        return stderr
+
+    err: bool | str
+    if crf_val >= 0:
+        err = run("libx264", ["-crf", str(crf_val)])
+        if err is True:
+            return
+        if isinstance(err, str) and (
+            "Unrecognized option 'crf'" in err or "Option not found" in err
+        ):
+            print(
+                f"[INFO] Switching RC: libx264 -crf unsupported -> using -x264-params crf={crf_val}"
+            )
+            err = run("libx264", ["-x264-params", f"crf={crf_val}"])
+            if err is True:
+                return
+            print(
+                f"[INFO] Switching RC: libx264 -x264-params failed -> using -qp {crf_val}"
+            )
+            err = run("libx264", ["-qp", str(crf_val)])
+            if err is True:
+                return
+    else:
+        err = run("libx264", [])
+        if err is True:
+            return
+
+    print(f"[INFO] Falling back to h264_nvenc (cq≈{crf_val + 1})")
+    err2 = run(
+        "h264_nvenc",
+        ["-cq", str(max(1, min(51, crf_val + 1)))] if crf_val >= 0 else [],
+    )
+    if err2 is True:
+        return
+    if isinstance(err2, str) and (
+        "Unrecognized option 'cq'" in err2 or "Option not found" in err2
+    ):
+        print(
+            f"[INFO] Switching RC: h264_nvenc -cq unsupported -> using -rc constqp -qp {crf_val + 2}"
+        )
+        err2 = run(
+            "h264_nvenc",
+            ["-rc", "constqp", "-qp", str(max(0, min(51, crf_val + 2)))]
+            if crf_val >= 0
+            else ["-rc", "constqp", "-qp", "23"],
+        )
+        if err2 is True:
+            return
+
+    print("[INFO] Falling back to mpeg4 (qscale=2)")
+    err3 = run("mpeg4", ["-qscale:v", "2"])
+    if err3 is True:
+        return
+
+    last_err = err3 if isinstance(err3, str) else (
+        err2 if isinstance(err2, str) else (err if isinstance(err, str) else "unknown error")
+    )
+    raise RuntimeError("FFmpeg export failed:\n" + "\n".join(str(last_err).splitlines()[:40]))
+
+
+def _export_mp4(output_dir: Path, mp4_path: Path, fps: int, crf: int) -> None:
+    """Stage frames and export an MP4 with robust fallbacks."""
+
+    stage_dir = _stage_frames(output_dir)
+    if not any(stage_dir.iterdir()):
+        LOGGER.warning("No frames to export at %s", output_dir)
+        return
+    _encode_mp4(stage_dir, mp4_path, fps, crf)
 
 
 # ---------------------------------------------------------------------------
