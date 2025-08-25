@@ -46,20 +46,35 @@ def test_calibrate_court_interpolates_homography(
             return False
 
     monkeypatch.setattr(cc.Image, "open", lambda p: DummyCtx(p))
-    monkeypatch.setattr(cc, "logger", types.SimpleNamespace(info=lambda *a, **k: None))
+    monkeypatch.setattr(
+        cc,
+        "logger",
+        types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None),
+    )
+    monkeypatch.setattr(cc, "verify_torch_ckpt", lambda path: None)
 
-    def fake_detect(w: int, h: int) -> dict:
+    def fake_detect(img, device, weights, min_score):
+        w, _ = img.size
         tx = w - 100
-        H = [[1.0, 0.0, float(tx)], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        h = [[1.0, 0.0, float(tx)], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
         poly = [[float(tx), 0.0], [float(tx + 1), 0.0], [float(tx + 1), 1.0], [float(tx), 1.0]]
-        return {"polygon": poly, "lines": {}, "homography": H, "score": 0.9}
+        return {"polygon": poly, "lines": {}, "homography": h, "score": 0.9}
 
-    monkeypatch.setattr(cc.cd, "_stub_detect", fake_detect)
+    monkeypatch.setattr(cc.cd, "detect_single_frame", fake_detect)
 
-    res = cc.calibrate_court(frames, device="cpu", min_score=0.5, stride=2)
+    res = cc.calibrate_court(
+        frames,
+        device="cpu",
+        weights=Path("w"),
+        min_score=0.5,
+        stride=2,
+        allow_placeholder=False,
+    )
     assert len(res) == 5
     # Translation for frame1 should be halfway between frame0 (0) and frame2 (20)
     assert abs(res[1]["homography"][0][2] - 10.0) < 1e-6
+    assert abs(res[1]["polygon"][0][0] - 10.0) < 1e-6
+    assert sum(not r["placeholder"] for r in res) > 0
     assert all(r["placeholder"] is False for r in res)
 
 
@@ -76,6 +91,8 @@ def test_parse_args_aliases() -> None:
             "7",
             "--stabilize",
             "ema",
+            "--weights",
+            "w.pth",
         ]
     )
     assert args.out_json == Path("out.json")

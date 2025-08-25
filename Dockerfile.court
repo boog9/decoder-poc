@@ -5,8 +5,16 @@ LABEL org.opencontainers.image.source="https://github.com/boog9/decoder-poc" \
       org.opencontainers.image.description="Decoder tennis court detector" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-RUN pip install --no-cache-dir pillow loguru
-
 WORKDIR /app
+
+# Install base and court detector dependencies
+COPY services/court_detector/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir pillow loguru \
+    && pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy source and create weights directory
 COPY . /app
+RUN mkdir -p /app/weights
+
+# Default entry point runs court calibration
 ENTRYPOINT ["python", "-m", "src.court_calib"]
