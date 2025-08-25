@@ -23,6 +23,33 @@ Example output:
 
 The script requires FFmpeg to be installed and available on the system path.
 
+## Detection CLI
+
+The `detect` command runs object detection on extracted frames. It now supports
+multi-scale execution with per-frame merging. Only "full" passes are currently
+implemented; ``--tiling`` and ``--roi-follow`` are parsed but skipped with a
+warning and have no effect.
+
+- `--multi-scale on|off` – enable the multi-pass workflow.
+- `--scales 1536,1920` – configure base and high-resolution passes.
+- `--tiling far2x2@0.2` – **experimental**, skipped for now.
+- `--roi-follow ball:win=640` – **experimental**, skipped for now.
+
+Example invocation (Docker):
+
+```bash
+docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
+  detect --frames-dir /app/frames --output-json /app/dets_ms.json \
+         --multi-scale on --scales 1536,1920 \
+         --merge "ball:0.55,person:0.5" \
+         --topk "ball:3,person:8" \
+         --scale-bonus "hi:ball:+0.1"
+```
+
+The implementation uses a clean architecture composed of a pass scheduler,
+execution runner and detection merger. All modules are located under
+`src/detect/`.
+
 When cloning the repository make sure to also fetch the ``ByteTrack``
 submodule:
 
