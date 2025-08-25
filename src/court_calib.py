@@ -139,6 +139,21 @@ def identity_h() -> List[List[float]]:
     return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 
 
+def lerp_poly(p0: np.ndarray, p1: np.ndarray, t: float) -> np.ndarray:
+    """Linearly interpolate between two polygons.
+
+    Args:
+        p0: Starting polygon of shape ``[4, 2]``.
+        p1: Ending polygon of shape ``[4, 2]``.
+        t: Interpolation factor in ``[0, 1]``.
+
+    Returns:
+        Interpolated polygon ``[4, 2]``.
+    """
+
+    return (1.0 - t) * p0 + t * p1
+
+
 def main() -> None:
     """Entry point for the CLI."""
 
@@ -173,6 +188,15 @@ def main() -> None:
     )
     parser.add_argument("--smooth", choices=["none", "ema"], default="none")
     parser.add_argument("--smooth-alpha", type=float, default=0.3)
+    parser.add_argument(
+        "--interp",
+        choices=["hold", "linear"],
+        default="hold",
+        help=(
+            "interpolate polygons for non-key frames: "
+            "'hold' = repeat last, 'linear' = linear interpolation between key frames"
+        ),
+    )
     args = parser.parse_args()
 
     # Auto-fallback: switch to CPU if CUDA is unavailable
@@ -196,36 +220,19 @@ def main() -> None:
     results: List[Dict[str, Any]] = []
     prev_poly: Optional[np.ndarray] = None  # EMA smoothing in 640x360
     last_valid_poly: Optional[List[List[float]]] = None  # original frame coords
+    last_base_poly: Optional[List[List[float]]] = None  # polygon of last key frame
+    gap_buffer: List[Tuple[int, str, int, int]] = []  # [(idx, frame_name, w, h)]
+    skipped_count = 0
+    lowconf_count = 0
 
     for idx, fp in enumerate(frames):
+        # accumulate skipped frames for later interpolation
         if idx % max(1, args.sample_rate) != 0:
-            if results:
-                results.append(
-                    {
-                        "frame": fp.name,
-                        "polygon": results[-1]["polygon"],
-                        "lines": {},
-                        "homography": identity_h(),
-                        "score": results[-1]["score"],
-                        "source": results[-1].get("source", "full"),
-                        "placeholder": True,
-                    }
-                )
-            else:
-                img_first = cv2.imread(str(fp), cv2.IMREAD_COLOR)
-                h0, w0 = img_first.shape[:2]
-                full = [[0.0, 0.0], [float(w0), 0.0], [float(w0), float(h0)], [0.0, float(h0)]]
-                results.append(
-                    {
-                        "frame": fp.name,
-                        "polygon": full,
-                        "lines": {},
-                        "homography": identity_h(),
-                        "score": 0.0,
-                        "source": "full",
-                        "placeholder": True,
-                    }
-                )
+            img_tmp = cv2.imread(str(fp), cv2.IMREAD_COLOR)
+            if img_tmp is not None:
+                h_, w_ = img_tmp.shape[:2]
+                gap_buffer.append((idx, fp.name, w_, h_))
+                skipped_count += 1
             continue
 
         img0 = cv2.imread(str(fp), cv2.IMREAD_COLOR)
@@ -240,14 +247,12 @@ def main() -> None:
             poly640 = ema_poly(prev_poly, poly640, args.smooth_alpha)
         prev_poly = poly640.copy()
 
+        # determine polygon for current key frame
         if score < args.min_score:
-            # low-confidence: choose fallback polygon
             if args.fallback == "detect":
                 poly_out = scale_poly(poly640, w0, h0)
-                src = "detect"
             elif args.fallback == "last" and last_valid_poly is not None:
                 poly_out = last_valid_poly
-                src = "last"
             else:  # "full" or no last valid polygon
                 poly_out = [
                     [0.0, 0.0],
@@ -255,39 +260,60 @@ def main() -> None:
                     [float(w0), float(h0)],
                     [0.0, float(h0)],
                 ]
-                src = "full"
-            results.append(
-                {
-                    "frame": fp.name,
-                    "polygon": poly_out,
-                    "lines": {},
-                    "homography": identity_h(),
-                    "score": float(score),
-                    "source": src,
-                    "placeholder": True,
-                }
-            )
+            base_placeholder = True
+            lowconf_count += 1
         else:
-            # valid detection
             poly_out = scale_poly(poly640, w0, h0)
             last_valid_poly = poly_out
-            results.append(
-                {
-                    "frame": fp.name,
-                    "polygon": poly_out,
-                    "lines": {},
-                    "homography": identity_h(),
-                    "score": float(score),
-                    "source": "detect",
-                    "placeholder": False,
-                }
-            )
+            base_placeholder = False
+
+        # interpolate skipped frames if any
+        if last_base_poly is not None and gap_buffer:
+            p0 = np.asarray(last_base_poly, dtype=np.float32)
+            p1 = np.asarray(poly_out, dtype=np.float32)
+            n = len(gap_buffer)
+            for k, (j_idx, j_name, j_w, j_h) in enumerate(gap_buffer, start=1):
+                if args.interp == "linear":
+                    t = k / (n + 1)
+                    pj = lerp_poly(p0, p1, t)
+                else:
+                    pj = p0
+                pj_list = [[float(x), float(y)] for x, y in pj.tolist()]
+                results.append(
+                    {
+                        "frame": j_name,
+                        "polygon": pj_list,
+                        "lines": {},
+                        "homography": identity_h(),
+                        "score": float(score),
+                        "placeholder": True,
+                    }
+                )
+            gap_buffer.clear()
+
+        # append current key frame
+        results.append(
+            {
+                "frame": fp.name,
+                "polygon": poly_out,
+                "lines": {},
+                "homography": identity_h(),
+                "score": float(score),
+                "placeholder": base_placeholder,
+            }
+        )
+        last_base_poly = poly_out
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f)
     valid = sum(1 for r in results if not r.get("placeholder", True))
-    print(f"| INFO | valid court frames: {valid}/{len(frames)}", file=sys.stderr)
+    placeholders = len(results) - valid
+    print(
+        f"| INFO | valid court frames: {valid}/{len(frames)} "
+        f"(placeholders={placeholders}, skipped={skipped_count}, lowconf={lowconf_count})",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

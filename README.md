@@ -878,6 +878,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | `--mask-thr` | Threshold for mask on normalized heatmaps | `0.30` |
 | `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
 | `--fallback` | Polygon for low-confidence frames (`last`, `full`, `detect`) | `last` |
+| `--interp` | Polygon interpolation for non-key frames (`hold`, `linear`) | `hold` |
 | `--smooth` | `none` or `ema` polygon smoothing | `none` |
 | `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
 | `--help` | Show CLI help | - |
@@ -891,16 +892,14 @@ homography:
     "frame": "frame_000001.png",
     "polygon": [[0,0],[639,0],[639,359],[0,359]],
     "lines": {"service_center": [[319,0],[319,359]]},
-    "homography": [[1,0,0],[0,1,0],[0,0,1]],
-    "score": 0.92,
-    "source": "detect",
-    "placeholder": false
-  }
+      "homography": [[1,0,0],[0,1,0],[0,0,1]],
+      "score": 0.92,
+      "placeholder": false
+}
 ]
 ```
-Frames without a confident detection use the polygon selected by `--fallback`,
-are marked with `"placeholder": true`, and set `"source"` to `"last"`,
-`"full"`, or `"detect"` accordingly.
+Frames without a confident detection use the polygon selected by `--fallback`
+and are marked with `"placeholder": true`.
 
 ## Court Calibration
 
@@ -934,7 +933,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 ```
 
 - Mount `/app` to access frames and outputs
-- Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `source`, `placeholder`
+ - Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `placeholder`
 
 CUDA example (requires rebuilding the image on a CUDA base and `--gpus all`):
 
@@ -959,6 +958,7 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
 | `--mask-thr` | Threshold for mask on normalized heatmaps | `0.30` |
 | `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
 | `--fallback` | Polygon for low-confidence frames (`last`, `full`, `detect`) | `last` |
+| `--interp` | Polygon interpolation for non-key frames (`hold`, `linear`) | `hold` |
 | `--smooth` | Polygon smoothing method (`none` or `ema`) | `none` |
 | `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
 
@@ -966,7 +966,7 @@ Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`.
 
 Frames with score below `--min-score` use the polygon selected by
 `--fallback` and are marked with `"placeholder": true`. Between valid frames,
-homographies, polygons and lines are linearly interpolated.
+polygons are interpolated using `--interp`.
 
 ## Пайплан на перевірку (копіпаст і вперед)
 
@@ -1087,4 +1087,5 @@ Parameters:
 - `--sample-rate` (default: `1`).
 - `--mask-thr` (default: `0.30`): threshold for mask on normalized heatmaps.
 - `--score-metric` (default: `max`): score aggregation (`max`, `mean`, `area`, `auto`).
- - `--fallback` (default: `last`): polygon to use when score < min-score (`last`, `full`, `detect`).
+- `--fallback` (default: `last`): polygon to use when score < min-score (`last`, `full`, `detect`).
+- `--interp` (default: `hold`): polygon interpolation for non-key frames (`hold`, `linear`).

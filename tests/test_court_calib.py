@@ -13,9 +13,19 @@
 
 from __future__ import annotations
 
-import numpy as np
+import sys
+from pathlib import Path
 
-from src.court_calib import scale_poly, identity_h
+# Replace dummy numpy from conftest with real implementation for cv2.
+sys.modules.pop("numpy", None)
+import numpy as np  # type: ignore  # noqa: E402
+
+# Ensure modules under repository are importable.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src"))
+
+from court_calib import identity_h, lerp_poly, scale_poly
 
 
 def test_scale_poly() -> None:
@@ -31,3 +41,15 @@ def test_identity_h() -> None:
 
     H = identity_h()
     assert H[0][0] == 1.0 and H[1][1] == 1.0 and H[2][2] == 1.0
+
+
+def test_lerp_poly() -> None:
+    """Linear interpolation between polygons uses factor t."""
+
+    p0 = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], dtype=np.float32)
+    p1 = np.array([[1.0, 1.0], [2.0, 1.0], [2.0, 2.0], [1.0, 2.0]], dtype=np.float32)
+    pj = lerp_poly(p0, p1, 0.5)
+    expected = np.array(
+        [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5]], dtype=np.float32
+    )
+    assert np.allclose(pj, expected)
