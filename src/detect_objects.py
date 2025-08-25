@@ -42,6 +42,8 @@ from loguru import logger
 
 # tennis tuning hotfix: class maps for summaries
 from .utils.classes import CLASS_NAME_TO_ID, CLASS_ID_TO_NAME
+from .detect.ms_scheduler import MSScheduler
+from .detect.merge import merge_detections as ms_merge, Detection as MSD
 
 COURT_CLASS_ID = CLASS_NAME_TO_ID["tennis_court"]
 
@@ -190,6 +192,90 @@ def _normalize_bbox(b) -> list[float] | None:
     if not isinstance(b, (list, tuple)) or len(b) != 4:
         return None
     return [float(x) for x in b]
+
+
+def _parse_kv_map(s: str | None, cast_val=float) -> dict[int, float]:
+    """Parse a class:value mapping string into a dictionary.
+
+    The input format is ``"class:value,class2:value2"``. Class names are
+    resolved using :func:`_class_id_from_name`.
+
+    Parameters
+    ----------
+    s:
+        Mapping string from the CLI.
+    cast_val:
+        Callable used to cast the value part; defaults to ``float``.
+
+    Returns
+    -------
+    dict[int, float]
+        Mapping of class ids to values.
+    """
+
+    if not s:
+        return {}
+    out: dict[int, float] = {}
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        k, v = part.split(":")
+        out[_class_id_from_name(_norm(k))] = cast_val(v)
+    return out
+
+
+def _parse_scale_bonus(s: str | None) -> dict[str, dict[int, float]]:
+    """Parse ``--scale-bonus`` specification.
+
+    Example input: ``"hi:ball:+0.1,base:person:+0.05"`` which yields::
+
+        {"hi": {BALL_ID: 0.1}, "base": {PERSON_ID: 0.05}}
+    """
+
+    if not s:
+        return {}
+    out: dict[str, dict[int, float]] = {}
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        scale, rest = part.split(":", 1)
+        cls, val = rest.split(":")
+        out.setdefault(scale, {})[_class_id_from_name(_norm(cls))] = float(val)
+    return out
+
+
+def _msd_from_dict(d: dict, source: str) -> MSD:
+    """Convert a raw detection dict to :class:`MSD`."""
+
+    return MSD(
+        bbox=list(map(float, d["bbox"])),
+        score=float(d["score"]),
+        class_id=int(d["class"]),
+        source=source,
+    )
+
+
+def _dict_from_msd(d: MSD) -> dict:
+    """Convert :class:`MSD` back to a serializable dict."""
+
+    return {
+        "class": int(d.class_id),
+        "score": float(d.score),
+        "bbox": list(map(float, d.bbox)),
+    }
+
+
+def _is_box_detection(d: dict) -> bool:
+    """Return True iff dict looks like a box detection with bbox+score."""
+
+    if not isinstance(d, dict):
+        return False
+    if "bbox" not in d or "score" not in d:
+        return False
+    bb = d["bbox"]
+    return isinstance(bb, (list, tuple)) and len(bb) == 4
 
 
 def _load_roi(path: Path) -> Polygon:
@@ -468,6 +554,39 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         help="Maximum gap for ball interpolation",  # tennis tuning
     )
     det.add_argument("--save-splits", action="store_true")
+    # Multi-scale / tiling / ROI follow options
+    det.add_argument(
+        "--multi-scale",
+        choices=["on", "off"],
+        default="off",
+        help="Enable multi-scale detection pipeline",
+    )
+    det.add_argument(
+        "--scales",
+        type=lambda s: [int(v) for v in s.split(",")],
+        default=[1536, 1920],
+        help="List of image sizes for passes (base,hi)",
+    )
+    det.add_argument(
+        "--tiling",
+        type=str,
+        default=None,
+        help="Tiling specification like far2x2@0.2",
+    )
+    det.add_argument(
+        "--roi-follow",
+        type=str,
+        default=None,
+        help="ROI follow specification, e.g. ball:win=640",
+    )
+    det.add_argument("--p-conf-base", type=float, default=DEFAULT_P_CONF)
+    det.add_argument("--b-conf-base", type=float, default=DEFAULT_B_CONF)
+    det.add_argument("--p-conf-hi", type=float, default=DEFAULT_P_CONF)
+    det.add_argument("--b-conf-hi", type=float, default=DEFAULT_B_CONF)
+    det.add_argument("--merge", type=str, default=None)
+    det.add_argument("--merge-person", type=str, default=None)
+    det.add_argument("--scale-bonus", type=str, default=None)
+    det.add_argument("--topk", type=str, default=None)
 
     # Tracking subcommand
     tr = sub.add_parser("track", help="Run ByteTrack on YOLOX detections")
@@ -1101,6 +1220,112 @@ def merge_detections(det_a: Sequence[dict], det_b: Sequence[dict]) -> List[dict]
     return out
 
 
+def _run_multi_scale(args: argparse.Namespace) -> None:
+    """Execute multi-scale detection on real frames."""
+    # ensure ROI default also applies if main() ordering ever changes
+    if args.roi_json is None:
+        _default_court = Path.cwd() / "court.json"
+        if _default_court.exists():
+            args.roi_json = _default_court
+
+    frames_dir = args.frames_dir or (Path.cwd() / "frames")
+    if not frames_dir.exists():
+        raise FileNotFoundError(f"--frames-dir not found: {frames_dir}")
+    frame_paths = sorted(
+        [p for p in frames_dir.iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg")]
+    )
+    if not frame_paths:
+        raise RuntimeError(f"No frames found in {frames_dir}")
+
+    scheduler = MSScheduler(scales=args.scales, tiling=args.tiling, roi_follow=args.roi_follow)
+    passes = scheduler.build(has_homography=False)
+
+    # tolerate both *nms* arg name variants
+    p_nms_val = getattr(args, "p_nms", getattr(args, "p_nms_thres", DEFAULT_P_NMS))
+    b_nms_val = getattr(args, "b_nms", getattr(args, "b_nms_thres", DEFAULT_B_NMS))
+
+    iou_map = _parse_kv_map(getattr(args, "merge", None))
+    topk_map_f = _parse_kv_map(getattr(args, "topk", None), cast_val=float)
+    topk_map: dict[int, int] = {k: int(v) for k, v in topk_map_f.items()}
+    bonuses_by_scale = _parse_scale_bonus(getattr(args, "scale_bonus", None))
+
+    per_pass_results: dict[str, dict[Any, list[dict]]] = {}
+    for pcfg in passes:
+        if pcfg.type != "full":
+            logger.warning("Pass %s (%s) is not implemented yet; skipping", pcfg.name, pcfg.type)
+            continue
+
+        tmp_out = Path(os.devnull)
+        person_classes = getattr(args, "person_classes", ["person"])
+        ball_classes = getattr(args, "ball_classes", ["ball", "sports ball"])
+        if pcfg.name == "hi":
+            p_conf = args.p_conf_hi
+            b_conf = args.b_conf_hi
+        else:
+            p_conf = args.p_conf_base
+            b_conf = args.b_conf_base
+
+        dets = detect_two_pass(
+            frames_dir=frames_dir,
+            out_json=tmp_out,
+            model_name=args.model,
+            p_conf=p_conf,
+            p_nms=p_nms_val,
+            person_img_size=pcfg.scale,
+            person_classes=person_classes,
+            b_conf=b_conf,
+            b_nms=b_nms_val,
+            ball_img_size=pcfg.scale,
+            ball_classes=ball_classes,
+            save_splits=False,
+            nms_class_aware=args.nms_class_aware,
+            roi_json=args.roi_json,
+            roi_margin=args.roi_margin,
+            keep_outside_roi=args.keep_outside_roi,
+            prelink_ball=args.prelink_ball,
+            ball_interp_gap_max=args.ball_interp_gap_max,
+            detect_court=False,
+        )
+        per_pass_results[pcfg.name] = {row["frame"]: row["detections"] for row in dets}
+    # Collect union of frame keys from all passes
+    all_keys: set = set()
+    for by_frame in per_pass_results.values():
+        all_keys.update(by_frame.keys())
+
+    # Sort keys using numeric id when available
+    frame_keys = sorted(all_keys, key=lambda k: _extract_frame_id(k) or 0)
+
+    merged_rows: list[dict] = []
+    for fk in frame_keys:
+        stacks: list[list[MSD]] = []
+        for pcfg in passes:
+            det_list = per_pass_results.get(pcfg.name, {}).get(fk, [])
+            msd_list: list[MSD] = []
+            for d in det_list:
+                if not _is_box_detection(d):
+                    continue
+                msd_list.append(_msd_from_dict(d, pcfg.name))
+            if bonuses_by_scale.get(pcfg.name):
+                bonus_map = bonuses_by_scale[pcfg.name]
+                for m in msd_list:
+                    m.score += bonus_map.get(m.class_id, 0.0)
+            stacks.append(msd_list)
+
+        fused = ms_merge(stacks, iou=iou_map, bonuses=None, topk=topk_map)
+        merged_rows.append({"frame": fk, "detections": [_dict_from_msd(x) for x in fused]})
+
+    merged_rows.sort(key=lambda e: _extract_frame_id(e.get("frame")) or 0)
+
+    out = args.output_json or (Path.cwd() / "detections_ms.json")
+    save_json(merged_rows, out)
+    logger.info(
+        "Multi-scale detection saved to %s (%d frames, %d passes)",
+        out,
+        len(merged_rows),
+        sum(1 for p in passes if p.type == "full"),
+    )
+
+
 def save_json(data: Sequence[dict], path: Path) -> None:
     """Write ``data`` to ``path`` as JSON."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1132,7 +1357,7 @@ def detect_two_pass(
     court_use_homography: bool = False,
     court_refine_kps: bool = False,
     court_weights: Path | None = None,
-) -> None:
+) -> list[dict]:
     """Run two-pass detection for person and ball classes."""
     if not torch.cuda.is_available():  # pragma: no cover
         raise RuntimeError("CUDA device required for YOLOX detection")
@@ -1145,7 +1370,7 @@ def detect_two_pass(
     )
     if not frames:
         logger.warning("No frames found in {}", frames_dir)
-        return
+        return []
     det_person = run_infer(
         model,
         frames,
@@ -1206,6 +1431,7 @@ def detect_two_pass(
         save_json(det_person, out_json.with_name(out_json.stem + "_person.json"))
         save_json(det_ball, out_json.with_name(out_json.stem + "_ball.json"))
     save_json(merged, out_json)
+    return merged
 
 
 def detect_folder(
@@ -1624,9 +1850,13 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     args = parse_args(argv)
     if getattr(args, "cmd", None) in (None, "detect"):
+        # pick up default court.json for ROI before any detect path
         default_court = Path.cwd() / "court.json"
         if args.roi_json is None and default_court.exists():
             args.roi_json = default_court  # tennis tuning
+        if getattr(args, "multi_scale", "off") == "on":
+            _run_multi_scale(args)
+            return
 
     if getattr(args, "cmd", None) in (None, "detect") and _is_track_container():
         logger.warning(
