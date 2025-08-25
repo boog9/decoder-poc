@@ -396,11 +396,14 @@ def test_export_mp4_skips_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     frame.write_bytes(b"0")
     calls: list[list[str]] = []
 
-    def fake_run(cmd, check, capture_output, text):
+    def fake_run(cmd: list[str]) -> None:
         calls.append(cmd)
-        return types.SimpleNamespace(stdout="", stderr="")
 
-    monkeypatch.setattr(dov.subprocess, "run", fake_run)
+    def fake_check(*a, **k):
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dov, "_run_command", fake_run)
+    monkeypatch.setattr(dov.subprocess, "run", fake_check)
     mp4 = tmp_path / "out.mp4"
     dov._export_mp4(tmp_path, mp4, 25, -1)
     assert calls
@@ -412,18 +415,25 @@ def test_export_mp4_fallback_no_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     frame.write_bytes(b"0")
     calls: list[list[str]] = []
 
-    def fake_run(cmd, check, capture_output, text):
+    def fake_command(cmd: list[str]) -> None:
         calls.append(cmd)
-        if len(calls) == 1:
-            raise dov.subprocess.CalledProcessError(1, cmd, stderr="Unrecognized option 'crf'")
-        return types.SimpleNamespace(stdout="", stderr="")
 
+    def fake_run(args, stdout=None, stderr=None, capture_output=False, text=False):
+        arg_list = args if isinstance(args, list) else []
+        if "encoder=libx264" in arg_list:
+            return types.SimpleNamespace(returncode=1)
+        if "encoder=h264_nvenc" in arg_list:
+            return types.SimpleNamespace(returncode=1)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dov, "_run_command", fake_command)
     monkeypatch.setattr(dov.subprocess, "run", fake_run)
     mp4 = tmp_path / "out.mp4"
     dov._export_mp4(tmp_path, mp4, 25, 23)
-    assert len(calls) >= 2
-    second = calls[1]
-    assert ("-crf" not in second) or ("-x264-params" in second)
+    assert calls
+    cmd = calls[0]
+    assert "mpeg4" in cmd
+    assert "-crf" not in cmd
 
 def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     frames = tmp_path / "frames"
