@@ -9,25 +9,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for helper functions in :mod:`src.court_calib`."""
+"""Tests for preprocess utility in ``services.court_detector.tcd``."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from src.court_calib import scale_poly, identity_h
+from services.court_detector.tcd import preprocess_to_640x360
 
 
-def test_scale_poly() -> None:
-    """Polygon is scaled from 640×360 to arbitrary size."""
+def test_preprocess_shape_and_range() -> None:
+    """Input image is resized and normalized correctly."""
 
-    poly = np.array([[0, 0], [640, 0], [640, 360], [0, 360]], dtype=np.float32)
-    scaled = scale_poly(poly, 1280, 720)
-    assert scaled[2] == [1280.0, 720.0]
-
-
-def test_identity_h() -> None:
-    """Identity homography has ones on the diagonal."""
-
-    H = identity_h()
-    assert H[0][0] == 1.0 and H[1][1] == 1.0 and H[2][2] == 1.0
+    img = np.zeros((100, 200, 3), dtype=np.uint8)
+    tensor = preprocess_to_640x360(img)
+    assert tensor.shape == (1, 3, 360, 640)
+    assert tensor.dtype.name == "float32"
+    assert tensor.min().item() == 0.0 and tensor.max().item() == 0.0

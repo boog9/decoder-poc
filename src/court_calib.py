@@ -9,260 +9,219 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Court geometry calibration with homography interpolation.
+"""Minimal court calibration pipeline.
 
-The script samples frames from a directory, runs the tennis court detector on
-key frames and linearly interpolates homographies for intermediate frames.
-
-Example:
-    python -m src.court_calib --frames-dir frames --out-json court.json \
-        --device cuda --weights weights/tcd.pth --min-score 0.6 --stride 10
+This script loads a checkpoint-based tennis court detector, runs inference on
+sampled frames, and writes polygons and placeholder metadata to a JSON file.
+The post-processing is intentionally lightweight and serves as a smoke test for
+pipeline integration.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List, Optional, Tuple
 
-from loguru import logger
-from PIL import Image
+import cv2
+import numpy as np
+import torch
 
-from . import court_detector as cd
-from .utils.checkpoint import verify_torch_ckpt
-
-
-def _parametrize_h(h: List[List[float]]) -> List[float]:
-    """Flatten a homography matrix into eight parameters."""
-
-    norm = h[2][2] if h[2][2] else 1.0
-    return [
-        h[0][0] / norm,
-        h[0][1] / norm,
-        h[0][2] / norm,
-        h[1][0] / norm,
-        h[1][1] / norm,
-        h[1][2] / norm,
-        h[2][0] / norm,
-        h[2][1] / norm,
-    ]
+from services.court_detector.tcd import (
+    TennisCourtDetectorFromSD,
+    preprocess_to_640x360,
+)
 
 
-def _deparametrize_h(p: List[float]) -> List[List[float]]:
-    """Reconstruct a 3x3 homography matrix from eight parameters."""
+def ema_poly(prev: Optional[np.ndarray], cur: np.ndarray, alpha: float) -> np.ndarray:
+    """Exponentially smoothed polygon."""
 
-    return [
-        [p[0], p[1], p[2]],
-        [p[3], p[4], p[5]],
-        [p[6], p[7], 1.0],
-    ]
+    if prev is None:
+        return cur
+    return (1.0 - alpha) * prev + alpha * cur
 
 
-def _interp_h(h0: List[List[float]], h1: List[List[float]], t: float) -> List[List[float]]:
-    """Linearly interpolate two homographies."""
+def box_from_heatmaps(hm: torch.Tensor, thr: float = 0.0) -> Tuple[np.ndarray, float]:
+    """Return polygon and score from raw heatmaps.
 
-    p0 = _parametrize_h(h0)
-    p1 = _parametrize_h(h1)
-    p = [(1 - t) * a + t * b for a, b in zip(p0, p1)]
-    return _deparametrize_h(p)
+    Args:
+        hm: Heatmaps of shape ``[1, 15, 360, 640]``.
+        thr: Optional absolute threshold.
+
+    Returns:
+        ``(polygon, score)`` where polygon is ``[4, 2]`` in 640×360 coords and
+        score is a rough confidence estimate in ``[0, 1]``.
+    """
+
+    with torch.no_grad():
+        act = hm.clamp_min(0).sum(dim=1, keepdim=True)
+        act_np = act.squeeze().cpu().numpy()
+        score = float(act_np.mean())
+        t = act_np.mean() if thr <= 0 else thr
+        mask = (act_np > t).astype(np.uint8)
+        kernel_open = np.ones((5, 5), np.uint8)
+        kernel_close = np.ones((9, 9), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return np.array([[0, 0], [640, 0], [640, 360], [0, 360]], np.float32), score
+        c = max(cnts, key=cv2.contourArea)
+        rect = cv2.minAreaRect(c)
+        box = cv2.boxPoints(rect)
+        return box.astype(np.float32), score
 
 
-def _interp_pts(p0: List[List[float]], p1: List[List[float]], t: float) -> List[List[float]]:
-    """Interpolate two point lists of equal length."""
+def build_model(weights_path: str, device: str) -> torch.nn.Module:
+    """Build a dynamic court detector from a checkpoint."""
 
-    return [[(1 - t) * x0 + t * x1, (1 - t) * y0 + t * y1] for (x0, y0), (x1, y1) in zip(p0, p1)]
-
-
-def _interp_lines(
-    l0: Dict[str, List[List[float]]], l1: Dict[str, List[List[float]]], t: float
-) -> Dict[str, List[List[float]]]:
-    """Interpolate court line endpoints."""
-
-    names = set(l0) | set(l1)
-    out: Dict[str, List[List[float]]] = {}
-    for n in names:
-        if n in l0 and n in l1:
-            out[n] = _interp_pts(l0[n], l1[n], t)
-        elif n in l0:
-            out[n] = l0[n]
-        else:
-            out[n] = l1[n]
-    return out
-
-
-def calibrate_court(
-    frames_dir: Path,
-    *,
-    device: str,
-    weights: Path,
-    min_score: float,
-    stride: int,
-    allow_placeholder: bool,
-) -> List[Dict[str, Any]]:
-    """Detect court on key frames and interpolate homographies."""
-    try:
-        wtype = verify_torch_ckpt(str(weights))
-    except Exception as exc:  # pragma: no cover - validation errors
-        raise SystemExit(f"ERROR: missing or invalid weights: {weights}") from exc
-
-    frame_paths = sorted(
-        [p for p in frames_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}],
-        key=lambda p: p.name,
-    )
-    if not frame_paths:
-        logger.warning(
-            "No frames found in %s (expected *.png/*.jpg/*.jpeg). Returning empty result.",
-            frames_dir,
+    sd_raw = torch.load(weights_path, map_location="cpu")
+    sd = sd_raw.get("state_dict", sd_raw) if isinstance(sd_raw, dict) else sd_raw
+    model = TennisCourtDetectorFromSD(sd)
+    info = model.load_state_dict(sd, strict=False)
+    missing = getattr(info, "missing_keys", [])
+    unexpected = getattr(info, "unexpected_keys", [])
+    if missing or unexpected:
+        print(
+            f"[WARN] load_state_dict: missing={len(missing)} unexpected={len(unexpected)}",
+            file=sys.stderr,
         )
-        return []
-    detections: Dict[int, Dict[str, Any]] = {}
-    for idx, frame in enumerate(frame_paths):
-        if idx % stride != 0:
-            continue
-        try:
-            with Image.open(frame) as img:
-                det = cd.detect_single_frame(
-                    img, device=device, weights=weights, min_score=min_score
-                )
-        except Exception as e:  # pragma: no cover - IOError paths
-            logger.warning("court_calib: failed on %s: %s", frame.name, e)
-            continue
-        rec = {
-            "frame": frame.name,
-            "polygon": det.get("polygon", []),
-            "lines": det.get("lines", {}),
-            "homography": det.get(
-                "homography", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-            ),
-            "score": det.get("score", 0.0),
-            "placeholder": not det,
-        }
-        detections[idx] = rec
-    valid = {i: r for i, r in detections.items() if not r["placeholder"]}
-    if not valid:
-        logger.warning("No valid court detections found; aborting.")
-        return []
+    model.to(device).eval()
+    return model
+
+
+def iter_frames(frames_dir: Path) -> List[Path]:
+    """Return sorted list of frame paths."""
+
+    exts = (".png", ".jpg", ".jpeg", ".bmp")
+    return [p for p in sorted(frames_dir.iterdir()) if p.suffix.lower() in exts]
+
+
+def scale_poly(poly640: np.ndarray, width: int, height: int) -> List[List[float]]:
+    """Scale polygon from 640×360 space to original image size."""
+
+    sx, sy = width / 640.0, height / 360.0
+    poly = poly640.copy()
+    poly[:, 0] *= sx
+    poly[:, 1] *= sy
+    return [[float(x), float(y)] for x, y in poly]
+
+
+def identity_h() -> List[List[float]]:
+    """Return a 3×3 identity homography."""
+
+    return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+
+
+def main() -> None:
+    """Entry point for the CLI."""
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--frames-dir", required=True)
+    parser.add_argument("--output-json", "--out-json", dest="output_json", required=True)
+    parser.add_argument("--weights", required=True)
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
+    parser.add_argument("--sample-rate", "--stride", dest="sample_rate", type=int, default=1)
+    parser.add_argument("--min-score", type=float, default=0.55)
+    parser.add_argument("--allow-placeholder", action="store_true")
+    parser.add_argument("--no-allow-placeholder", dest="allow_placeholder", action="store_false")
+    parser.set_defaults(allow_placeholder=True)
+    parser.add_argument("--smooth", choices=["none", "ema"], default="none")
+    parser.add_argument("--smooth-alpha", type=float, default=0.3)
+    args = parser.parse_args()
+
+    frames_dir = Path(args.frames_dir)
+    out_path = Path(args.output_json)
+
+    print(
+        f"| INFO | loading court detector (state_dict) from {args.weights} on {args.device}",
+        file=sys.stderr,
+    )
+    model = build_model(args.weights, args.device)
+
+    frames = iter_frames(frames_dir)
+    if not frames:
+        raise SystemExit(f"No frames in {frames_dir}")
+
     results: List[Dict[str, Any]] = []
-    for i, frame in enumerate(frame_paths):
-        name = frame.name
-        if i in detections:
-            rec = detections[i]
-            if rec["placeholder"]:
-                prev_idx = max([j for j in valid if j < i], default=None)
-                next_idx = min([j for j in valid if j > i], default=None)
-                src_idx = prev_idx
-                if next_idx is not None and (
-                    prev_idx is None or i - prev_idx > next_idx - i
-                ):
-                    src_idx = next_idx
-                if src_idx is not None:
-                    src = valid[src_idx]
-                    rec = {
-                        "frame": name,
-                        "polygon": src["polygon"],
-                        "lines": src["lines"],
-                        "homography": src["homography"],
-                        "score": src["score"],
-                        "placeholder": allow_placeholder,
+    prev_poly: Optional[np.ndarray] = None
+
+    for idx, fp in enumerate(frames):
+        if idx % max(1, args.sample_rate) != 0:
+            if results:
+                results.append(
+                    {
+                        "frame": fp.name,
+                        "polygon": results[-1]["polygon"],
+                        "lines": {},
+                        "homography": identity_h(),
+                        "score": results[-1]["score"],
+                        "placeholder": True,
                     }
-                else:
-                    continue
-            results.append(rec)
+                )
+            else:
+                img_first = cv2.imread(str(fp), cv2.IMREAD_COLOR)
+                h0, w0 = img_first.shape[:2]
+                full = [[0.0, 0.0], [float(w0), 0.0], [float(w0), float(h0)], [0.0, float(h0)]]
+                results.append(
+                    {
+                        "frame": fp.name,
+                        "polygon": full,
+                        "lines": {},
+                        "homography": identity_h(),
+                        "score": 0.0,
+                        "placeholder": True,
+                    }
+                )
             continue
-        prev_idx = max([j for j in valid if j < i], default=None)
-        next_idx = min([j for j in valid if j > i], default=None)
-        if prev_idx is None and next_idx is None:
-            continue
-        if prev_idx is None:
-            src = valid[next_idx]
-            results.append({**src, "frame": name, "placeholder": False})
-            continue
-        if next_idx is None:
-            src = valid[prev_idx]
-            results.append({**src, "frame": name, "placeholder": False})
-            continue
-        r0, r1 = valid[prev_idx], valid[next_idx]
-        t = (i - prev_idx) / (next_idx - prev_idx)
-        h = _interp_h(r0["homography"], r1["homography"], t)
-        poly = _interp_pts(r0["polygon"], r1["polygon"], t)
-        lines = _interp_lines(r0["lines"], r1["lines"], t)
-        score = (1 - t) * r0["score"] + t * r1["score"]
-        results.append(
-            {
-                "frame": name,
-                "polygon": poly,
-                "lines": lines,
-                "homography": h,
-                "score": score,
-                "placeholder": False,
-            }
-        )
-    results.sort(key=lambda r: r["frame"])
-    valid_count = sum(1 for r in results if not r.get("placeholder"))
-    if results:
-        logger.info(
-            "valid court frames: {}/{} ({:.1f}%)",
-            valid_count,
-            len(results),
-            (valid_count / len(results)) * 100.0,
-        )
-    return results
 
+        img0 = cv2.imread(str(fp), cv2.IMREAD_COLOR)
+        if img0 is None:
+            continue
+        h0, w0 = img0.shape[:2]
+        ten = preprocess_to_640x360(img0).to(args.device)
+        with torch.no_grad():
+            hm = model(ten)
+        poly640, score = box_from_heatmaps(hm)
+        if args.smooth == "ema":
+            poly640 = ema_poly(prev_poly, poly640, args.smooth_alpha)
+        prev_poly = poly640.copy()
 
-def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    """Parse command-line arguments."""
+        if score < args.min_score and not args.allow_placeholder:
+            results.append(
+                {
+                    "frame": fp.name,
+                    "polygon": [[0.0, 0.0], [float(w0), 0.0], [float(w0), float(h0)], [0.0, float(h0)]],
+                    "lines": {},
+                    "homography": identity_h(),
+                    "score": float(score),
+                    "placeholder": True,
+                }
+            )
+        else:
+            results.append(
+                {
+                    "frame": fp.name,
+                    "polygon": scale_poly(poly640, w0, h0),
+                    "lines": {},
+                    "homography": identity_h(),
+                    "score": float(score),
+                    "placeholder": False if score >= args.min_score else True,
+                }
+            )
 
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--frames-dir", type=Path, required=True, help="Input frames directory")
-    # primary options
-    parser.add_argument("--out-json", dest="out_json", type=Path, required=False, help="Output JSON path")
-    parser.add_argument("--stride", type=int, default=5, help="Process every Nth frame")
-    # backward-compatible aliases
-    parser.add_argument("--output-json", dest="out_json", type=Path, required=False, help="Alias of --out-json")
-    parser.add_argument("--sample-rate", dest="stride", type=int, required=False, help="Alias of --stride")
-    parser.add_argument(
-        "--stabilize",
-        choices=["ema", "median"],
-        required=False,
-        help="(no-op) reserved for future smoothing",
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(results, f)
+    print(
+        f"| INFO | valid court frames: {len(results)}/{len(frames)}",
+        file=sys.stderr,
     )
-    parser.add_argument("--device", choices=["cuda", "cpu"], default="cpu")
-    parser.add_argument("--min-score", type=float, default=0.4, help="Minimum confidence score")
-    parser.add_argument("--weights", type=Path, required=True, help="Path to detector weights")
-    parser.add_argument(
-        "--allow-placeholder",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Keep frames with failed detections as placeholders",
-    )
-    return parser.parse_args(argv)
 
 
-def main(argv: Iterable[str] | None = None) -> int:
-    """CLI entry point."""
+if __name__ == "__main__":
+    main()
 
-    args = parse_args(argv)
-    if getattr(args, "stabilize", None):
-        logger.warning(
-            "Flag --stabilize={} is currently a no-op in court_calib; smoothing may be added later.",
-            args.stabilize,
-        )
-    data = calibrate_court(
-        args.frames_dir,
-        device=args.device,
-        weights=args.weights,
-        min_score=args.min_score,
-        stride=args.stride,
-        allow_placeholder=args.allow_placeholder,
-    )
-    if args.out_json is None:
-        raise SystemExit("ERROR: --out-json/--output-json is required")
-    args.out_json.parent.mkdir(parents=True, exist_ok=True)
-    with args.out_json.open("w") as fh:
-        json.dump(data, fh, indent=2)
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
