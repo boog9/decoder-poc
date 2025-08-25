@@ -16,7 +16,7 @@ key frames and linearly interpolates homographies for intermediate frames.
 
 Example:
     python -m src.court_calib --frames-dir frames --out-json court.json \
-        --device cuda --min-score 0.6 --stride 10
+        --device cuda --weights weights/tcd.pth --min-score 0.6 --stride 10
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from loguru import logger
 from PIL import Image
 
 from . import court_detector as cd
+from .utils.checkpoint import verify_torch_ckpt
 
 
 def _parametrize_h(h: List[List[float]]) -> List[float]:
@@ -91,9 +92,19 @@ def _interp_lines(
 
 
 def calibrate_court(
-    frames_dir: Path, device: str, min_score: float, stride: int
+    frames_dir: Path,
+    *,
+    device: str,
+    weights: Path,
+    min_score: float,
+    stride: int,
+    allow_placeholder: bool,
 ) -> List[Dict[str, Any]]:
     """Detect court on key frames and interpolate homographies."""
+    try:
+        wtype = verify_torch_ckpt(str(weights))
+    except Exception as exc:  # pragma: no cover - validation errors
+        raise SystemExit(f"ERROR: missing or invalid weights: {weights}") from exc
 
     frame_paths = sorted(
         [p for p in frames_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}],
@@ -111,20 +122,27 @@ def calibrate_court(
             continue
         try:
             with Image.open(frame) as img:
-                w, h = img.size
-        except Exception:
+                det = cd.detect_single_frame(
+                    img, device=device, weights=weights, min_score=min_score
+                )
+        except Exception as e:  # pragma: no cover - IOError paths
+            logger.warning("court_calib: failed on %s: %s", frame.name, e)
             continue
-        det = cd._stub_detect(w, h)  # placeholder for real detector call
         rec = {
             "frame": frame.name,
             "polygon": det.get("polygon", []),
             "lines": det.get("lines", {}),
-            "homography": det.get("homography", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            "homography": det.get(
+                "homography", [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            ),
             "score": det.get("score", 0.0),
-            "placeholder": det.get("score", 0.0) < min_score,
+            "placeholder": not det,
         }
         detections[idx] = rec
     valid = {i: r for i, r in detections.items() if not r["placeholder"]}
+    if not valid:
+        logger.warning("No valid court detections found; aborting.")
+        return []
     results: List[Dict[str, Any]] = []
     for i, frame in enumerate(frame_paths):
         name = frame.name
@@ -133,7 +151,11 @@ def calibrate_court(
             if rec["placeholder"]:
                 prev_idx = max([j for j in valid if j < i], default=None)
                 next_idx = min([j for j in valid if j > i], default=None)
-                src_idx = prev_idx if next_idx is None or (prev_idx is not None and i - prev_idx <= next_idx - i) else next_idx
+                src_idx = prev_idx
+                if next_idx is not None and (
+                    prev_idx is None or i - prev_idx > next_idx - i
+                ):
+                    src_idx = next_idx
                 if src_idx is not None:
                     src = valid[src_idx]
                     rec = {
@@ -142,8 +164,10 @@ def calibrate_court(
                         "lines": src["lines"],
                         "homography": src["homography"],
                         "score": src["score"],
-                        "placeholder": True,
+                        "placeholder": allow_placeholder,
                     }
+                else:
+                    continue
             results.append(rec)
             continue
         prev_idx = max([j for j in valid if j < i], default=None)
@@ -205,6 +229,13 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--device", choices=["cuda", "cpu"], default="cpu")
     parser.add_argument("--min-score", type=float, default=0.4, help="Minimum confidence score")
+    parser.add_argument("--weights", type=Path, required=True, help="Path to detector weights")
+    parser.add_argument(
+        "--allow-placeholder",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep frames with failed detections as placeholders",
+    )
     return parser.parse_args(argv)
 
 
@@ -220,8 +251,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     data = calibrate_court(
         args.frames_dir,
         device=args.device,
+        weights=args.weights,
         min_score=args.min_score,
         stride=args.stride,
+        allow_placeholder=args.allow_placeholder,
     )
     if args.out_json is None:
         raise SystemExit("ERROR: --out-json/--output-json is required")

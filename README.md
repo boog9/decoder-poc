@@ -903,18 +903,43 @@ Service/Docker image name: `decoder-court:latest`
 
 Purpose: interpolate court homographies between key frames.
 
+### Download TennisCourtDetector weights
+
+```bash
+# Google Drive (official)
+https://drive.google.com/file/d/1f-Co64ehgq4uddcQm1aFBDtbnyZhQvgG/view
+
+# Quick download
+python -m pip install -q gdown
+gdown --fuzzy "https://drive.google.com/file/d/1f-Co64ehgq4uddcQm1aFBDtbnyZhQvgG/view" -O weights/tcd.pth
+```
+
+The Docker image does not contain weights. Mount `weights/tcd.pth` from the
+host when running the container. `tcd.pth` is a **state_dict** checkpoint
+loaded via ``torch.load`` (not TorchScript).
+
 ### Startup example
 
 ```bash
-# CPU-only image by default:
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir /app/frames --out-json /app/court.json \
-  --device cpu --min-score 0.6 --stride 10
+  --frames-dir /app/frames \
+  --out-json   /app/court.json \
+  --device cpu --weights /app/weights/tcd.pth \
+  --min-score 0.6 --stride 10
 ```
 
 - Mount `/app` to access frames and outputs
-- GPU note: this image is CPU-only. `--device cuda` requires switching the base image to a CUDA runtime.
 - Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `placeholder`
+
+CUDA example (requires rebuilding the image on a CUDA base and `--gpus all`):
+
+```bash
+docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
+  --frames-dir /app/frames \
+  --out-json   /app/court.json \
+  --device cuda --weights /app/weights/tcd.pth \
+  --min-score 0.6 --stride 10
+```
 
 ### Parameters
 
@@ -923,11 +948,17 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | `--frames-dir` | Input directory with frame images | **required** |
 | `--out-json` | Output path for court calibration data | **required** |
 | `--device` | `cuda` or `cpu` for detector execution | `cpu` |
+| `--weights` | Path to `tcd.pth` weights | **required** |
 | `--min-score` | Minimum detection confidence | `0.4` |
 | `--stride` | Process every Nth frame | `5` |
+| `--allow-placeholder` | Keep frames with failed detections | `false` |
 
 Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`. The
 `--stabilize` flag is accepted for compatibility but currently does nothing.
+
+If `--allow-placeholder` is set, failed key frames are filled with the nearest
+valid geometry and marked with `"placeholder": true`. Between valid frames,
+homographies, polygons and lines are linearly interpolated.
 
 ## Пайплан на перевірку (копіпаст і вперед)
 
@@ -942,7 +973,8 @@ DOCKER_BUILDKIT=1 docker build -f Dockerfile.track  -t decoder-track:latest .
 # 1) court (calibration + interpolation)
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames --out-json /app/court.json \
-  --stride 5 --device cpu
+  --device cpu --weights /app/weights/tcd.pth \
+  --stride 5
 # (also works with --output-json, --sample-rate, --stabilize (no-op))
 
 # 2) detect
@@ -951,7 +983,9 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
          --output-json /app/detections.json \
          --two-pass --nms-class-aware \
          --roi-json /app/court.json --roi-margin 8 \
-         --detect-court
+         --detect-court --multi-scale on \
+         --p-conf 0.30 --b-conf 0.10 \
+         --p-nms 0.60 --b-nms 0.35
 
 # 3) track (тенісні дефолти + appearance-refine автоматично)
 docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
