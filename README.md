@@ -257,12 +257,14 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
         --fps 30 --min-score 0.28 \
         --pre-nms-iou 0.6 --pre-min-area-q 0.15 --pre-topk 3 --pre-court-gate \
         --p-match-thresh 0.55 --p-track-buffer 160 --reid-reuse-window 150 \
-        --b-match-thresh 0.55 --b-track-buffer 150 \
+        --b-match-thresh 0.55 --b-track-buffer 150 --color-sim-w 0.10 \
         --stitch --stitch-iou 0.55 --stitch-gap 12 \
         --smooth ema --smooth-alpha 0.3 \
         --assoc-plane court --assoc-w-iou 0.4 --assoc-w-plane 0.6 \
         --assoc-plane-thresh 0.25
 ```
+Frames in `--frames-dir` may be named `000001.jpg|png` or `frame_000001.jpg|png`; PNGs with alpha are converted to RGB automatically.
+
 > `pre-court-gate` works only with a real court polygon. If `court.json` is a full-frame placeholder, the gate has no effect—either disable it (`--no-pre-court-gate`) or run `decoder-court` with weights to obtain real geometry.
 
 Association tuning:
@@ -719,6 +721,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--min-score` | Detection score threshold | `0.3` |
   | `--fps` | Video frame rate | `30` |
   | `--reid-reuse-window` | Frames to keep IDs for reuse | `125` |
+  | `--color-sim-w` | Weight for colour similarity in ID reuse | `0.0` |
   | `--pre-nms-iou` | Greedy NMS IoU for persons | `0.0` |
   | `--pre-min-area-q` | Quantile filter for small boxes | `0.0` |
   | `--pre-topk` | Keep top-K persons per frame | `0` |
