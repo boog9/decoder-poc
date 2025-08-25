@@ -673,6 +673,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=0.25,
         help="Max allowed normalized plane distance for a match (0..1)",
     )
+    tr.add_argument(
+        "--color-sim-w",
+        type=float,
+        default=0.0,
+        help="Weight for colour similarity term in ID reuse",
+    )
     # Person tracker params
     tr.add_argument(
         "--p-track-thresh",
@@ -1946,6 +1952,7 @@ def main(argv: Iterable[str] | None = None) -> None:
                 args.appearance_refine,
                 args.appearance_lambda,
                 args.frames_dir,
+                args.color_sim_w,
             )
         except Exception as exc:  # pragma: no cover - top level
             logger.exception("Tracking failed")

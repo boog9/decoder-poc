@@ -16,9 +16,10 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import inspect
+import colorsys
 from loguru import logger
 try:
     from PIL import Image  # type: ignore
@@ -36,6 +37,21 @@ from .detect_objects import (
     _get_tlwh_from_track,
 )
 from .ball_kalman import BallKalmanFilter
+
+
+def _resolve_frame_path(frames_dir: Path, frame_id: int) -> Optional[Path]:
+    """Return existing frame path for ``frame_id`` using multiple patterns."""
+
+    candidates = [
+        frames_dir / f"{frame_id:06d}.jpg",
+        frames_dir / f"{frame_id:06d}.png",
+        frames_dir / f"frame_{frame_id:06d}.jpg",
+        frames_dir / f"frame_{frame_id:06d}.png",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def make_byte_tracker(
@@ -110,6 +126,61 @@ def make_byte_tracker(
         match_thresh=match,
         frame_rate=fps,
     )
+
+
+def _hsv_hist(img: Image.Image, tlwh: List[float], bins: int = 8):
+    """Return L1-normalised HSV histogram of the upper half of ``tlwh``."""
+
+    if Image is None:
+        return [0.0] * (bins ** 3)
+
+    x, y, w, h = [int(v) for v in tlwh]
+    if w <= 0 or h <= 0:
+        return [0.0] * (bins ** 3)
+
+    crop = img.crop((x, y, x + w, y + h // 2)).convert("RGB")
+    hist = [0.0] * (bins ** 3)
+    for r, g, b in crop.getdata():
+        h_f, s_f, v_f = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+        hi = int(h_f * bins) % bins
+        si = int(s_f * bins) % bins
+        vi = int(v_f * bins) % bins
+        hist[hi * bins * bins + si * bins + vi] += 1.0
+    total = sum(hist)
+    if total > 0:
+        hist = [h / total for h in hist]
+    return hist
+
+
+def _cosine_sim(a, b) -> float:
+    """Return cosine similarity between two vectors."""
+
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    denom = na * nb
+    if denom == 0.0:
+        return 0.0
+    return dot / denom
+
+
+def _allow_low_score(det: dict, active: Dict[int, Tuple[List[float], int, object | None]]) -> bool:
+    """Return ``True`` if area change warrants temporary threshold drop."""
+
+    x1, y1, x2, y2 = det["bbox"]
+    w = x2 - x1
+    h = y2 - y1
+    area_det = w * h
+    tlwh_det = [x1, y1, w, h]
+    for bbox, _, _ in active.values():
+        iou = _iou(tlwh_det, bbox)
+        if iou > 0.1:
+            area_tr = bbox[2] * bbox[3]
+            if area_tr > 0 and area_det > 0:
+                ratio = max(area_det, area_tr) / max(min(area_det, area_tr), 1e-9)
+                if ratio > 2.0:
+                    return True
+    return False
 
 
 def _load_detections_grouped(
@@ -837,6 +908,7 @@ def track_detections(
     appearance_refine: bool = False,
     appearance_lambda: float = 0.3,
     frames_dir: Path | None = None,
+    color_sim_w: float = 0.0,
 ) -> None:
     """Track detections for persons and balls separately."""
 
@@ -864,7 +936,8 @@ def track_detections(
         except Exception:
             default_size = None
 
-    frames = _load_detections_grouped(detections_json, min_score)
+    # Load all detections; per-frame filtering handles min_score.
+    frames = _load_detections_grouped(detections_json, 0.0)
 
     court_cls = CLASS_NAME_TO_ID.get("tennis_court")
     if court_json:
@@ -970,7 +1043,7 @@ def track_detections(
         reid_reuse_window,
     )
 
-    active: Dict[int, Dict[int, Tuple[List[float], int]]] = {
+    active: Dict[int, Dict[int, Tuple[List[float], int, object | None]]] = {
         cid: {} for cid in trackers
     }
     reuse: Dict[int, List[dict]] = {cid: [] for cid in trackers}
@@ -995,14 +1068,25 @@ def track_detections(
             frame_w = max_x2 or 1920.0
             frame_h = max_y2 or 1080.0
 
+        img = None
+        if frames_dir is not None and Image is not None:
+            path = _resolve_frame_path(frames_dir, frame_id)
+            if path is not None:
+                try:
+                    with Image.open(path) as im:
+                        img = im.convert("RGB")
+                except Exception:
+                    img = None
+
         for cls_id, tracker in trackers.items():
             dets = frames[frame_id].get(cls_id, [])
             if cls_id == CLASS_NAME_TO_ID["sports ball"]:
-                # Keep only by min area here; aspect/area/speed/accel gating is centralized in _filter_ball_candidates
+                # Filter by score and min area
                 dets = [
                     d
                     for d in dets
-                    if (d["bbox"][2] - d["bbox"][0]) * (d["bbox"][3] - d["bbox"][1]) >= b_min_box_area
+                    if d["score"] >= min_score
+                    and (d["bbox"][2] - d["bbox"][0]) * (d["bbox"][3] - d["bbox"][1]) >= b_min_box_area
                 ]
                 H = None
                 if assoc_plane == "court":
@@ -1020,7 +1104,11 @@ def track_detections(
                     H,
                 )
             else:
-                n_start = len(dets)
+                dets = [
+                    d
+                    for d in dets
+                    if d["score"] >= min_score or _allow_low_score(d, active[cls_id])
+                ]
                 if pre_nms_iou > 0:
                     dets = _pre_nms_persons(dets, pre_nms_iou)
                 if pre_court_gate:
@@ -1040,7 +1128,7 @@ def track_detections(
                         cx = (det["bbox"][0] + det["bbox"][2]) / 2.0
                         cy = (det["bbox"][1] + det["bbox"][3]) / 2.0
                         side_det = cy > court_mid_y
-                        for bbox, _ in active[cls_id].values():
+                        for bbox, _, _ in active[cls_id].values():
                             cx2 = bbox[0] + bbox[2] / 2.0
                             cy2 = bbox[1] + bbox[3] / 2.0
                             side_tr = cy2 > court_mid_y
@@ -1059,15 +1147,6 @@ def track_detections(
                                     if iou > 0.1:
                                         det["score"] *= 0.5  # tennis tuning
                                         break
-                if n_start and frame_id % 30 == 0:
-                    removed = n_start - len(dets)
-                    logger.debug(
-                        "frame {}: pre-filters removed {}/{} person detections ({:.1f}%)",
-                        frame_id,
-                        removed,
-                        n_start,
-                        (removed / n_start) * 100.0,
-                    )
             tlwhs = [
                 (
                     b[0],
@@ -1080,7 +1159,7 @@ def track_detections(
             scores = [d["score"] for d in dets]
             classes = [cls_id] * len(dets)
             H = None
-            court_dims: Tuple[float, float] | None = None
+            court_dims: Tuple[float, float] | None = None  # default to avoid UnboundLocalError
             if assoc_plane == "court":
                 H = homography_map.get(frame_id)
                 poly = court_map.get(frame_id)
@@ -1123,7 +1202,10 @@ def track_detections(
             for tr in tracks:
                 tlwh = list(_get_tlwh_from_track(tr))
                 tid = getattr(tr, "track_id", id(tr))
-                reuse_id = _reuse_id(reuse[cls_id], tlwh, frame_id, reid_reuse_window)
+                hist = _hsv_hist(img, tlwh) if img is not None else None
+                reuse_id = _reuse_id(
+                    reuse[cls_id], tlwh, hist, frame_id, reid_reuse_window, color_sim_w
+                )
                 if reuse_id is not None:
                     tid = reuse_id
                 out.append(
@@ -1141,13 +1223,13 @@ def track_detections(
                         "track_id": tid,
                     }
                 )
-                active[cls_id][tid] = (tlwh, frame_id)
+                active[cls_id][tid] = (tlwh, frame_id, hist)
                 current_ids.add(tid)
 
             vanished = set(active[cls_id]) - current_ids
             for vid in vanished:
-                bbox, last_frame = active[cls_id].pop(vid)
-                reuse[cls_id].append({"id": vid, "bbox": bbox, "frame": last_frame})
+                bbox, last_frame, hist = active[cls_id].pop(vid)
+                reuse[cls_id].append({"id": vid, "bbox": bbox, "frame": last_frame, "hist": hist})
             reuse[cls_id] = [
                 r for r in reuse[cls_id] if frame_id - r["frame"] <= reid_reuse_window
             ]
@@ -1188,18 +1270,29 @@ def track_detections(
 
 
 def _reuse_id(
-    cache: List[dict], bbox: List[float], frame_id: int, window: int
+    cache: List[dict],
+    bbox: List[float],
+    hist,
+    frame_id: int,
+    window: int,
+    color_w: float,
 ) -> int | None:
-    """Return cached ID if ``bbox`` matches a recently vanished track."""
+    """Return cached ID using IoU and colour similarity."""
 
-    x, y, w, h = bbox
+    best: tuple[dict, float] | None = None
     for item in cache:
         if frame_id - item["frame"] > window:
             continue
         iou = _iou(bbox, item["bbox"])
-        if iou >= 0.6:
-            cache.remove(item)
-            return item["id"]
+        cos = 1.0
+        if color_w > 0 and item.get("hist") is not None and hist is not None:
+            cos = _cosine_sim(hist, item["hist"])
+        cost = (1.0 - iou) + color_w * (1.0 - cos)
+        if best is None or cost < best[1]:
+            best = (item, cost)
+    if best is not None and best[1] <= 0.45:
+        cache.remove(best[0])
+        return best[0]["id"]
     return None
 
 
