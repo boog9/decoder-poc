@@ -702,6 +702,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
             --pre-nms-iou 0.6 --pre-min-area-q 0.5 --pre-topk 3 --pre-court-gate \
             --p-match-thresh 0.60 --p-track-buffer 125 --reid-reuse-window 125 \
             --stitch --stitch-iou 0.55 --stitch-gap 5 \
+            --ball-max-area-q 0.01 --ball-max-accel 20000 --ball-max-speed 3000 \
             --smooth ema --smooth-alpha 0.3
   ```
 
@@ -729,13 +730,18 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   | `--p-track-buffer` | Person track buffer | `125` |
   | `--b-track-thresh` | Ball track threshold | `0.15` |
   | `--b-high-thresh` | Ball high detection threshold | `0.30` |
-  | `--b-match-thresh` | Ball match threshold | `0.85` |
-  | `--b-track-buffer` | Ball track buffer | `90` |
+  | `--b-match-thresh` | Ball match threshold | `0.55` |
+  | `--b-track-buffer` | Ball track buffer | `150` |
   | `--b-min-box-area` | Minimum ball box area | `4` |
-  | `--b-max-aspect-ratio` | Maximum ball aspect ratio | `2.0` |
-  | `--stitch` | Enable predictive ID stitching | `False` |
+  | `--b-max-aspect-ratio` | Maximum ball aspect ratio | `1.7` |
+  | `--ball-max-area-q` | Max ball area fraction of frame | `0.01` |
+  | `--ball-max-speed` | Max ball speed (px/s) | `3000` |
+  | `--ball-max-accel` | Max ball acceleration (px/s^2) | `20000` |
+  | `--stitch` | Enable predictive ID stitching | `True` |
   | `--smooth` | Trajectory smoothing method | `none` |
   | `--appearance-refine` | Enable HSV appearance matching | `False` |
+
+> Note: Speed/accel thresholds are defined in pixel units of the frame. If you switch to court-plane association with homography, adjust thresholds accordingly.
 
   **Quick sanity check:**
 
@@ -747,6 +753,7 @@ This prints the number of invalid bounding boxes and low-confidence detections.
           --pre-nms-iou 0.6 --pre-min-area-q 0.5 --pre-topk 3 --pre-court-gate \
           --p-match-thresh 0.60 --p-track-buffer 125 --reid-reuse-window 125 \
           --stitch --stitch-iou 0.55 --stitch-gap 5 \
+          --ball-max-area-q 0.01 --ball-max-accel 20000 --ball-max-speed 3000 \
           --smooth ema --smooth-alpha 0.3
   ```
 
@@ -759,7 +766,7 @@ Recommended thresholds for tennis court videos:
 | `--p-conf` | 0.35 | - |
 | `--b-conf` | - | 0.05 |
 | `--p-track-buffer` | 125 | - |
-| `--b-track-buffer` | - | 90 |
+| `--b-track-buffer` | - | 150 |
 
 Example commands:
 
@@ -774,8 +781,8 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
   track --detections-json /app/detections.json --output-json /app/tracks.json \
   --fps 30 --reid-reuse-window 125 \
   --p-track-thresh 0.50 --p-high-thresh 0.60 --p-match-thresh 0.60 --p-track-buffer 125 \
-  --b-track-thresh 0.15 --b-high-thresh 0.30 --b-match-thresh 0.85 --b-track-buffer 90 \
-  --b-min-box-area 4 --b-max-aspect-ratio 2.0
+  --b-track-thresh 0.15 --b-high-thresh 0.30 --b-match-thresh 0.55 --b-track-buffer 150 \
+  --b-min-box-area 4 --b-max-aspect-ratio 1.7
 
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   -m src.draw_overlay \

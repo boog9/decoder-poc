@@ -732,8 +732,26 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     tr.add_argument(
         "--b-max-aspect-ratio",
         type=float,
-        default=2.0,
+        default=1.7,
         help="Maximum ball box aspect ratio",
+    )
+    tr.add_argument(
+        "--ball-max-area-q",
+        type=float,
+        default=0.01,
+        help="Max ball area as fraction of frame area",
+    )
+    tr.add_argument(
+        "--ball-max-speed",
+        type=float,
+        default=3000.0,
+        help="Max ball speed in pixels per second",
+    )
+    tr.add_argument(
+        "--ball-max-accel",
+        type=float,
+        default=20000.0,
+        help="Max ball acceleration in pixels per second squared",
     )
     # Post-process
     tr.add_argument(
@@ -1903,6 +1921,9 @@ def main(argv: Iterable[str] | None = None) -> None:
                 args.b_track_buffer,
                 args.b_min_box_area,
                 args.b_max_aspect_ratio,
+                args.ball_max_area_q,
+                args.ball_max_speed,
+                args.ball_max_accel,
                 args.pre_nms_iou,
                 args.pre_min_area_q,
                 args.pre_topk,
