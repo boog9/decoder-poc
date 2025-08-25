@@ -188,6 +188,7 @@ def test_track_color_consistent_over_frames(tmp_path: Path, monkeypatch: pytest.
         True,
         None,
         None,
+        None,
         False,
         {},
     )
@@ -247,6 +248,7 @@ def test_draw_overlay_renders_court_polygon(tmp_path: Path, monkeypatch: pytest.
         "class",
         True,
         True,
+        None,
         None,
         None,
         False,
@@ -316,6 +318,7 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
         True,
         None,
         None,
+        None,
         False,
         {},
     )
@@ -379,6 +382,7 @@ def test_draw_overlay_skips_court_polygon_when_disabled(
         True,
         None,
         None,
+        None,
         False,
         {},
     )
@@ -420,3 +424,192 @@ def test_export_mp4_fallback_no_crf(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert len(calls) >= 2
     second = calls[1]
     assert ("-crf" not in second) or ("-x264-params" in second)
+
+def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "frame_000001.png").write_bytes(b"0")
+    frame_map: dict[str, list[dict]] = {"frame_000001.png": []}
+    roi_map = {
+        "1": {
+            "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+        }
+    }
+
+    class DummyCV2:
+        def __init__(self) -> None:
+            self.poly_count = 0
+        def imread(self, path: str, flag=None):
+            import types
+            return types.SimpleNamespace(shape=(10, 10, 3))
+        def imwrite(self, path: str, img) -> bool:
+            return True
+        def polylines(self, *a, **k): self.poly_count += 1
+        def rectangle(self, *a, **k): pass
+        def putText(self, *a, **k): pass
+        FONT_HERSHEY_SIMPLEX = 0
+        LINE_AA = 16
+        IMREAD_COLOR = 1
+
+    import src.draw_overlay as dov
+    dummy = DummyCV2()
+    monkeypatch.setattr(dov, "cv2", dummy)
+
+    out = tmp_path / "out"
+    res = dov._draw_overlay(
+        frames,
+        frame_map,
+        out,
+        False,
+        False,
+        0.0,
+        set(),
+        set(),
+        1,
+        0.5,
+        0,
+        -1,
+        0,
+        "class",
+        True,
+        False,
+        None,
+        None,
+        roi_map,
+        False,
+        {},
+        False,
+    )
+    assert res == 1
+    assert dummy.poly_count >= 1
+
+
+def test_compute_court_lines_identity() -> None:
+    lines = dov._compute_court_lines([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    assert "service_center" in lines
+    assert lines["baseline_south"][0] == [0.0, 0.0]
+
+
+def test_draw_overlay_detect_mode_writes_score(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "frame_000001.png").write_bytes(b"0")
+    det_map = {"frame_000001.png": [{"bbox": [0, 0, 2, 2], "score": 0.75, "class": 0}]}
+
+    texts: list[str] = []
+
+    class DummyCV2:
+        def imread(self, path: str, flag=None):
+            return types.SimpleNamespace(shape=(10, 10, 3))
+
+        def imwrite(self, path: str, img) -> bool:
+            return True
+
+        def rectangle(self, *a, **k):
+            pass
+
+        def putText(self, img, text, org, font, fs, color, th, lt):
+            texts.append(text)
+
+        def polylines(self, *a, **k):
+            pass
+
+        FONT_HERSHEY_SIMPLEX = 0
+        LINE_AA = 16
+        IMREAD_COLOR = 1
+
+    monkeypatch.setattr(dov, "cv2", DummyCV2())
+
+    out = tmp_path / "out"
+    res = dov._draw_overlay(
+        frames,
+        det_map,
+        out,
+        False,
+        False,
+        0.0,
+        set(),
+        set(),
+        1,
+        0.5,
+        0,
+        -1,
+        0,
+        "detect",
+        False,
+        False,
+        None,
+        None,
+        None,
+        False,
+        {},
+        False,
+    )
+    assert res == 1
+    assert any("0.75" in t for t in texts)
+
+
+def test_draw_overlay_placeholder_star(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "frame_000001.png").write_bytes(b"0")
+    frame_map: dict[str, list[dict]] = {"frame_000001.png": []}
+    roi_map = {
+        "frame_000001.png": {
+            "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+            "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "placeholder": True,
+        }
+    }
+
+    texts: list[str] = []
+
+    class DummyCV2:
+        def imread(self, path: str, flag=None):
+            return types.SimpleNamespace(shape=(10, 10, 3))
+
+        def imwrite(self, path: str, img) -> bool:
+            return True
+
+        def polylines(self, *a, **k):
+            pass
+
+        def rectangle(self, *a, **k):
+            pass
+
+        def putText(self, img, text, org, font, fs, color, th, lt):
+            texts.append(text)
+
+        FONT_HERSHEY_SIMPLEX = 0
+        LINE_AA = 16
+        IMREAD_COLOR = 1
+
+    monkeypatch.setattr(dov, "cv2", DummyCV2())
+
+    out = tmp_path / "out"
+    res = dov._draw_overlay(
+        frames,
+        frame_map,
+        out,
+        False,
+        False,
+        0.0,
+        set(),
+        set(),
+        1,
+        0.5,
+        0,
+        -1,
+        0,
+        "class",
+        True,
+        False,
+        None,
+        None,
+        roi_map,
+        False,
+        {},
+        False,
+    )
+    assert res == 1
+    assert "*" in texts

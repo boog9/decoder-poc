@@ -21,7 +21,7 @@ import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from shapely.geometry import Polygon  # tennis tuning
 
@@ -85,6 +85,56 @@ def _roi_is_frame(poly: "Polygon") -> bool:
         and miny <= 1
         and (maxx >= 1000 or maxy >= 1000)
     )
+
+
+def _apply_h(pts: List[List[float]], h: List[List[float]]) -> List[List[float]]:
+    """Project points via homography matrix.
+
+    Args:
+        pts: Points in world coordinates.
+        h: 3x3 homography matrix.
+
+    Returns:
+        Transformed points in pixel coordinates.
+    """
+
+    H = np.array(h, dtype=float)
+    arr = np.array(pts, dtype=float)
+    ones = np.ones((arr.shape[0], 1))
+    homog = np.hstack([arr, ones])
+    prod = homog @ H.T
+    prod /= prod[:, 2:3] + 1e-9
+    return prod[:, :2].tolist()
+
+
+def _compute_court_lines(h: List[List[float]]) -> Dict[str, List[List[float]]]:
+    """Compute standard ITF tennis court lines using ``homography``.
+
+    Args:
+        h: 3x3 homography mapping court coordinates (metres) to pixels.
+
+    Returns:
+        Mapping of line name to list of two endpoints in pixel coordinates.
+    """
+
+    width = 10.97
+    length = 23.77
+    half_width = width / 2.0
+    net_y = length / 2.0
+    service_offset = 6.40
+    mark_len = 0.1
+    south_y = net_y - service_offset
+    north_y = net_y + service_offset
+    layout = {
+        "baseline_south": [[0.0, 0.0], [width, 0.0]],
+        "baseline_north": [[0.0, length], [width, length]],
+        "service_south": [[0.0, south_y], [width, south_y]],
+        "service_north": [[0.0, north_y], [width, north_y]],
+        "service_center": [[half_width, south_y], [half_width, north_y]],
+        "center_mark_south": [[half_width, 0.0], [half_width, mark_len]],
+        "center_mark_north": [[half_width, length], [half_width, length - mark_len]],
+    }
+    return {name: _apply_h(pts, h) for name, pts in layout.items()}
 
 
 def _load_class_map(path: Path) -> Dict[int, str]:
@@ -226,6 +276,75 @@ def _load_roi(path: Path) -> Tuple["Polygon", Dict[str, List[List[float]]]]:
     return Polygon(pts), lines
 
 
+def _load_roi_map(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load per-frame ROI data from ``court.json``-style files.
+
+    Args:
+        path: Path to JSON file.
+
+    Returns:
+        Mapping of frame names to dictionaries with optional keys
+        ``polygon``, ``lines``, ``homography`` and ``placeholder``.
+    """
+
+    with path.open() as fh:
+        data = json.load(fh)
+
+    mapping: Dict[str, Dict[str, Any]] = {}
+
+    def _add_aliases(item: Dict[str, Any]) -> None:
+        # Основний ключ — числовий індекс кадру
+        if "frame" in item and item["frame"] is not None:
+            try:
+                idx = int(item["frame"])
+                mapping[str(idx)] = item
+                # Додаємо типові імена файлів для кадру
+                mapping[f"frame_{idx:06d}.png"] = item
+                mapping[f"frame_{idx:06d}.jpg"] = item
+                mapping[f"frame_{idx:06d}.jpeg"] = item
+            except (TypeError, ValueError):
+                pass
+        # Додатково: якщо явно вказано filename/path/name — теж мапимо
+        for k in ("file", "name", "path"):
+            v = item.get(k)
+            if isinstance(v, str) and v:
+                mapping[v] = item
+
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            _add_aliases(item)
+            # Фолбек: якщо немає жодного ключа, класти за зростанням
+            if not any(x in item for x in ("frame", "file", "name", "path")):
+                mapping[str(len(mapping))] = item
+    elif isinstance(data, dict):
+        _add_aliases(data)
+        if not any(x in data for x in ("frame", "file", "name", "path")):
+            mapping["0"] = data
+    else:
+        raise TypeError("ROI JSON must be a dict or a list")
+    return mapping
+
+
+def _get_frame_roi(idx: int, path: Path, roi_map: Dict[str, Dict[str, Any]] | None) -> Optional[Dict[str, Any]]:
+    """Підібрати ROI для кадру за кількома можливими ключами."""
+
+    if not roi_map:
+        return None
+    candidates = [
+        path.name,
+        f"frame_{idx:06d}.png",
+        f"frame_{idx:06d}.jpg",
+        f"frame_{idx:06d}.jpeg",
+        str(idx),
+    ]
+    for key in candidates:
+        if key in roi_map:
+            return roi_map[key]
+    return None
+
+
 def _resolve_frame_path(
     frames_dir: Path, frame_key: str | int
 ) -> Tuple[Optional[Path], Optional[int]]:
@@ -286,6 +405,29 @@ def _parse_class_filter(value: Optional[str]) -> Tuple[set[str], set[int]]:
     return names, ids
 
 
+def _draw_axes(img: np.ndarray, h: List[List[float]], thickness: int) -> None:
+    """Draw small coordinate axes in opposite court corners."""
+
+    axes = [(0.0, 0.0), (10.97, 23.77)]
+    for base in axes:
+        p0, px, py = _apply_h(
+            [base, (base[0] + 1.0, base[1]), (base[0], base[1] + 1.0)], h
+        )
+        x0, y0 = map(int, p0)
+        x1, y1 = map(int, px)
+        x2, y2 = map(int, py)
+        if hasattr(cv2, "arrowedLine"):
+            cv2.arrowedLine(
+                img, (x0, y0), (x1, y1), (0, 0, 255), max(1, thickness // 2), tipLength=0.2
+            )
+            cv2.arrowedLine(
+                img, (x0, y0), (x2, y2), (0, 255, 0), max(1, thickness // 2), tipLength=0.2
+            )
+        else:  # pragma: no cover - minimal OpenCV builds
+            cv2.line(img, (x0, y0), (x1, y1), (0, 0, 255), max(1, thickness // 2))
+            cv2.line(img, (x0, y0), (x2, y2), (0, 255, 0), max(1, thickness // 2))
+
+
 # ---------------------------------------------------------------------------
 # Drawing logic
 # ---------------------------------------------------------------------------
@@ -310,8 +452,10 @@ def _draw_overlay(
     draw_court_lines: bool,
     roi_poly: Polygon | None,
     roi_lines: Dict[str, List[List[float]]] | None,
+    roi_map: Dict[str, Dict[str, Any]] | None,
     only_court: bool,
     primary_map: Dict[int, int],
+    draw_court_axes: bool = False,
 ) -> int:
     """Draw overlays for ``frame_map``.
 
@@ -344,7 +488,23 @@ def _draw_overlay(
             LOGGER.warning("Failed to read %s", path)
             continue
         h, w = img.shape[:2]
-        if only_court and (roi_poly is None or _roi_is_frame(roi_poly)):
+        frame_roi = _get_frame_roi(idx, path, roi_map)
+        frame_poly = roi_poly
+        frame_lines = roi_lines
+        placeholder = False
+        homography = None
+        if frame_roi:
+            if frame_roi.get("polygon"):
+                frame_poly = Polygon(frame_roi["polygon"])  # type: ignore[arg-type]
+            if frame_roi.get("lines"):
+                frame_lines = frame_roi.get("lines")
+            homography = frame_roi.get("homography")
+            placeholder = bool(frame_roi.get("placeholder"))
+
+        if draw_court_lines and (not frame_lines) and homography:
+            frame_lines = _compute_court_lines(homography)
+
+        if only_court and (frame_poly is None or _roi_is_frame(frame_poly)):
             for det in dets:
                 if det.get("class") == COURT_CLASS_ID and det.get("polygon") and draw_court:
                     pts = np.array(
@@ -360,23 +520,47 @@ def _draw_overlay(
                                 img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
                             )
                     break
+            if placeholder:
+                cv2.putText(
+                    img,
+                    "*",
+                    (5, int(20 * font_scale) + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale * 2.0,
+                    (0, 0, 255),
+                    max(1, thickness),
+                    cv2.LINE_AA,
+                )
             _imwrite(output_dir / path.name, img)
             written += 1
             continue  # tennis tuning
-        if draw_court and roi_poly is not None and not _roi_is_frame(roi_poly):
+        if draw_court and frame_poly is not None and not _roi_is_frame(frame_poly):
             pts = np.array(
-                [[int(x), int(y)] for x, y in roi_poly.exterior.coords], dtype=np.int32
+                [[int(x), int(y)] for x, y in frame_poly.exterior.coords], dtype=np.int32
             )
             cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
-            if draw_court_lines and roi_lines:
-                for line in roi_lines.values():
+            if draw_court_lines and frame_lines:
+                for line in frame_lines.values():
                     lpts = np.array(
                         [[int(x), int(y)] for x, y in line], dtype=np.int32
                     )
                     cv2.polylines(
                         img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
                     )
+            if draw_court_axes and homography:
+                _draw_axes(img, homography, thickness)
             if only_court:
+                if placeholder:
+                    cv2.putText(
+                        img,
+                        "*",
+                        (5, int(20 * font_scale) + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        font_scale * 2.0,
+                        (0, 0, 255),
+                        max(1, thickness),
+                        cv2.LINE_AA,
+                    )
                 _imwrite(output_dir / path.name, img)
                 written += 1
                 continue  # tennis tuning
@@ -395,6 +579,8 @@ def _draw_overlay(
                         cv2.polylines(
                             img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
                         )
+                if draw_court_axes and det.get("homography"):
+                    _draw_axes(img, det["homography"], thickness)
                 continue
             score = float(det.get("score", 0.0))
             if score < confidence_thr:
@@ -434,7 +620,9 @@ def _draw_overlay(
             if show_id and mode == "track":
                 if disp_tid is not None:
                     text_bits.append(f"#{disp_tid}")
-            if label:
+            if mode == "detect":
+                text_bits.append(f"{score:.2f}")
+            elif label:
                 text_bits.append(cname)
                 if det.get("score") is not None:
                     text_bits.append(f"{score:.2f}")
@@ -450,6 +638,17 @@ def _draw_overlay(
                     max(1, thickness - 1),
                     cv2.LINE_AA,
                 )
+        if placeholder:
+            cv2.putText(
+                img,
+                "*",
+                (5, int(20 * font_scale) + 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale * 2.0,
+                (0, 0, 255),
+                max(1, thickness),
+                cv2.LINE_AA,
+            )
         out_path = output_dir / path.name
         if cv2.imwrite(str(out_path), img):
             written += 1
@@ -579,7 +778,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tracks-json", type=Path, help="Tracks JSON file")
     parser.add_argument(
         "--mode",
-        choices=["auto", "class", "track"],
+        choices=["auto", "class", "track", "detect"],
         default="auto",
         help="Overlay mode (default: auto)",
     )
@@ -598,6 +797,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Draw internal court lines when available",
+    )
+    parser.add_argument(
+        "--draw-court-axes",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Draw small court axes when homography is known",
     )
     parser.add_argument(
         "--confidence-thr", type=float, default=0.0, help="Minimum score threshold"
@@ -663,8 +868,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     else:
         mode = args.mode
 
-    if mode == "class" and not args.detections_json:
-        LOGGER.error("--detections-json required for class mode")
+    if mode in {"class", "detect"} and not args.detections_json:
+        LOGGER.error("--detections-json required for class/detect mode")
         return 1
     if mode == "track" and not args.tracks_json:
         LOGGER.error("--tracks-json required for track mode")
@@ -679,7 +884,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             LOGGER.error("Failed to load class map: %s", exc)
             return 1
 
-    if mode == "class":
+    if mode in {"class", "detect"}:
         frame_map = _load_detections(args.detections_json)
     else:
         frame_map = _load_tracks(args.tracks_json)
@@ -693,8 +898,15 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     roi_poly: Optional[Polygon] = None
     roi_lines: Optional[Dict[str, List[List[float]]]] = None
+    roi_map: Optional[Dict[str, Dict[str, Any]]] = None
     if args.roi_json:
-        roi_poly, roi_lines = _load_roi(args.roi_json)  # tennis tuning
+        roi_map = _load_roi_map(args.roi_json)
+        if roi_map:
+            first = next(iter(roi_map.values()))
+            if first.get("polygon"):
+                roi_poly = Polygon(first.get("polygon"))  # type: ignore[arg-type]
+            if first.get("lines"):
+                roi_lines = first.get("lines")
 
     primary_map: Dict[int, int] = {}
     if mode == "track" and args.primary_id_stick > 0:
@@ -733,8 +945,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.draw_court_lines,
         roi_poly,
         roi_lines,
+        roi_map,
         args.only_court,
         primary_map,
+        args.draw_court_axes,
     )
 
     if written == 0:
