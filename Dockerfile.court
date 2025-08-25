@@ -6,6 +6,7 @@ LABEL org.opencontainers.image.source="https://github.com/boog9/decoder-poc" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
 # Install base and court detector dependencies
 COPY services/court_detector/requirements.txt /tmp/requirements.txt
@@ -13,7 +14,9 @@ RUN pip install --no-cache-dir pillow loguru \
     && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Copy source and create weights directory
-COPY . /app
+COPY services/ /app/services/
+COPY src/ /app/src/
+COPY tools/ /app/tools/
 RUN mkdir -p /app/weights
 
 # Default entry point runs court calibration

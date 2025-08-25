@@ -873,9 +873,12 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | `--frames-dir` | Input directory with frame images | **required** |
 | `--output-json` | Output file for court polygons | **required** |
 | `--weights` | Path to `TennisCourtDetector` weights (e.g. `/app/weights/tcd.pth`) | _none_ |
-| `--sample-rate` | Process every Nth frame and interpolate between | `5` |
-| `--stabilize` | `ema` or `median` coordinate smoothing | `ema` |
-| `--allow-placeholder` | Emit full-frame placeholder when detection fails | `false` |
+| `--device` | `cpu` or `cuda` execution device | `cpu` |
+| `--sample-rate` | Process every Nth frame | `1` |
+| `--min-score` | Minimum activation threshold | `0.55` |
+| `--smooth` | `none` or `ema` polygon smoothing | `none` |
+| `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
+| `--allow-placeholder` | Emit full-frame placeholder when detection fails | `true` |
 | `--help` | Show CLI help | - |
 
 The output `court.json` has one entry per frame with optional lines and
@@ -949,12 +952,13 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
 | `--out-json` | Output path for court calibration data | **required** |
 | `--device` | `cuda` or `cpu` for detector execution | `cpu` |
 | `--weights` | Path to `tcd.pth` weights | **required** |
-| `--min-score` | Minimum detection confidence | `0.4` |
-| `--stride` | Process every Nth frame | `5` |
-| `--allow-placeholder` | Keep frames with failed detections | `false` |
+| `--min-score` | Minimum detection confidence | `0.55` |
+| `--stride` | Process every Nth frame | `1` |
+| `--allow-placeholder` | Keep frames with failed detections | `true` |
+| `--smooth` | Polygon smoothing method (`none` or `ema`) | `none` |
+| `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
 
-Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`. The
-`--stabilize` flag is accepted for compatibility but currently does nothing.
+Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`.
 
 If `--allow-placeholder` is set, failed key frames are filled with the nearest
 valid geometry and marked with `"placeholder": true`. Between valid frames,
@@ -1016,26 +1020,36 @@ ffmpeg with libx264.
 docker run --rm -v "$(pwd)":/app decoder-track:latest \
 python tools/verify_tennis_defaults.py --tracks-json /app/tracks.json
 ```
-### Model weights (TCD, 64-channel)
+## Court Detector
 
-* File: `weights/tcd.pth` (width check):
+- **Image:** `decoder-court`
+- **Purpose:** detect tennis court geometry from frame sequences.
+- **GPU:** optional
+
+### Verify weights
 
 ```bash
-python - <<'PY'
-import torch; sd=torch.load('weights/tcd.pth','cpu'); sd=sd.get('state_dict',sd) if isinstance(sd,dict) else sd
-print('base_channels =', sd['conv1.block.0.weight'].shape[0])  # should print 64
-PY
+docker run -i --rm -v "$(pwd)":/app --entrypoint python decoder-court:latest \
+  tools/check_tcd_weights.py
 ```
 
-* The loader infers `base_channels` from the checkpoint and builds the matching model.
-* Sample execution:
+### Run inference
 
 ```bash
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
-  --frames-dir  /app/frames \
+  --frames-dir /app/frames \
   --output-json /app/court.json \
   --device cpu \
   --weights /app/weights/tcd.pth \
-  --sample-rate 3 \
-  --min-score 0.25
+  --min-score 0.55 \
+  --sample-rate 4
 ```
+
+Parameters:
+
+- `--frames-dir` (required): directory with input frames.
+- `--output-json` (required): path for detections.
+- `--device` (default: `cpu`).
+- `--weights` (default: `/app/weights/tcd.pth`).
+- `--min-score` (default: `0.55`).
+- `--sample-rate` (default: `1`).
