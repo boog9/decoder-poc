@@ -863,8 +863,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 - Mount `/app` to access frames and outputs
 - GPU not required
 - Includes `loguru` (>=0.7.0) for logging
-- Provide `--weights /app/weights/tcd.pth`; without weights, add `--allow-placeholder` to emit a full-frame placeholder
-  (real geometry is recommended for gating and line rendering)
+ - Provide `--weights /app/weights/tcd.pth`; real geometry is recommended for gating and line rendering.
 
 ### Parameters
 
@@ -876,9 +875,11 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | `--device` | `cpu` or `cuda` execution device | `cpu` |
 | `--sample-rate` | Process every Nth frame | `1` |
 | `--min-score` | Minimum activation threshold | `0.55` |
+| `--mask-thr` | Threshold for mask on normalized heatmaps | `0.30` |
+| `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
+| `--fallback` | Polygon for low-confidence frames (`last`, `full`, `detect`) | `last` |
 | `--smooth` | `none` or `ema` polygon smoothing | `none` |
 | `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
-| `--allow-placeholder` | Emit full-frame placeholder when detection fails | `true` |
 | `--help` | Show CLI help | - |
 
 The output `court.json` has one entry per frame with optional lines and
@@ -892,13 +893,14 @@ homography:
     "lines": {"service_center": [[319,0],[319,359]]},
     "homography": [[1,0,0],[0,1,0],[0,0,1]],
     "score": 0.92,
+    "source": "detect",
     "placeholder": false
   }
 ]
 ```
-Frames without a confident detection are omitted unless
-`--allow-placeholder` is enabled, in which case a full-frame polygon with
-`"placeholder": true` is returned.
+Frames without a confident detection use the polygon selected by `--fallback`,
+are marked with `"placeholder": true`, and set `"source"` to `"last"`,
+`"full"`, or `"detect"` accordingly.
 
 ## Court Calibration
 
@@ -932,7 +934,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 ```
 
 - Mount `/app` to access frames and outputs
-- Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `placeholder`
+- Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `source`, `placeholder`
 
 CUDA example (requires rebuilding the image on a CUDA base and `--gpus all`):
 
@@ -954,14 +956,16 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
 | `--weights` | Path to `tcd.pth` weights | **required** |
 | `--min-score` | Minimum detection confidence | `0.55` |
 | `--stride` | Process every Nth frame | `1` |
-| `--allow-placeholder` | Keep frames with failed detections | `true` |
+| `--mask-thr` | Threshold for mask on normalized heatmaps | `0.30` |
+| `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
+| `--fallback` | Polygon for low-confidence frames (`last`, `full`, `detect`) | `last` |
 | `--smooth` | Polygon smoothing method (`none` or `ema`) | `none` |
 | `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
 
 Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`.
 
-If `--allow-placeholder` is set, failed key frames are filled with the nearest
-valid geometry and marked with `"placeholder": true`. Between valid frames,
+Frames with score below `--min-score` use the polygon selected by
+`--fallback` and are marked with `"placeholder": true`. Between valid frames,
 homographies, polygons and lines are linearly interpolated.
 
 ## Пайплан на перевірку (копіпаст і вперед)
@@ -1057,6 +1061,11 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --sample-rate 4
 ```
 
+> **Note:** if you see `pull access denied for decoder-court:cuda`, build the CUDA image locally first:
+> ```bash
+> DOCKER_BUILDKIT=1 docker build -f Dockerfile.court -t decoder-court:cuda --build-arg TORCH_CHANNEL=cu121 .
+> ```
+
 GPU:
 ```bash
 docker run --rm --gpus all -v "$(pwd)":/app decoder-court:cuda \
@@ -1076,3 +1085,6 @@ Parameters:
 - `--weights` (default: `/app/weights/tcd.pth`).
 - `--min-score` (default: `0.55`).
 - `--sample-rate` (default: `1`).
+- `--mask-thr` (default: `0.30`): threshold for mask on normalized heatmaps.
+- `--score-metric` (default: `max`): score aggregation (`max`, `mean`, `area`, `auto`).
+ - `--fallback` (default: `last`): polygon to use when score < min-score (`last`, `full`, `detect`).

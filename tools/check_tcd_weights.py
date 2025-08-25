@@ -25,7 +25,10 @@ def main() -> None:  # pragma: no cover - used in Docker verification
     module = importlib.import_module("services.court_detector.tcd")
     model_static = getattr(module, "TennisCourtDetector")
     model_dynamic = getattr(module, "TennisCourtDetectorFromSD", None)
-    sd_raw = torch.load("weights/tcd.pth", map_location="cpu")
+    try:
+        sd_raw = torch.load("weights/tcd.pth", map_location="cpu", weights_only=True)
+    except TypeError:
+        sd_raw = torch.load("weights/tcd.pth", map_location="cpu")
     sd = sd_raw.get("state_dict", sd_raw) if isinstance(sd_raw, dict) else sd_raw
     if model_dynamic is not None:
         model = model_dynamic(sd)
