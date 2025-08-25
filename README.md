@@ -192,14 +192,23 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --detections-json /app/detections.json \
   --output-dir /app/frames_det \
   --mode class --label
+
+# quick detection preview with scores only
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --frames-dir /app/frames \
+  --detections-json /app/detections_large.json \
+  --output-dir /app/preview_detect \
+  --mode detect --draw-court-lines --roi-json /app/court.json
 ```
 
 Use `--draw-court=false` to hide the court polygon and
 `--no-draw-court-lines` to omit internal lines.
 
-`--roi-json` accepts either a single polygon `{ "polygon": [...] }` or a `court.json` file with per-frame polygons (the polygon from the first frame is used).
+`--roi-json` accepts either a single polygon `{ "polygon": [...] }` or a `court.json` file with per-frame entries. Entries can be keyed by numeric `frame` index (e.g. `"frame": 123` → matches `frame_000123.(png|jpg|jpeg)`) or by explicit filename (e.g. `"file": "frame_000123.png"`). If a homography is provided but the file lacks internal `lines`, standard ITF court lines are generated automatically. Frames with `"placeholder": true` are marked with a star.
 
 - `--only-court`: Draw only the court contour without boxes or IDs.
+- `--draw-court-axes`: Render tiny coordinate axes when a homography is available.
 - `--palette-seed`: Stabilise the colour palette globally.
 - `--class-map`: Optional JSON/YAML mapping of class IDs to names.
 - `--confidence-thr`: Filter detections below this score.
