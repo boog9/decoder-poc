@@ -864,7 +864,16 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 - GPU not required
 - Includes `loguru` (>=0.7.0) for logging
 - Provide `--weights /app/weights/tcd.pth`; real geometry is recommended for gating and line rendering.
-- Frames are sorted naturally by numeric suffix (e.g. `frame_2` before `frame_10`).
+
+GPU example with heatmap dump:
+
+```bash
+docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
+  --frames-dir /app/frames --output-json /app/court.json \
+  --weights /app/weights/tcd.pth --device cuda --dump-heatmaps
+```
+
+Use `--dump-kps-json path` to write raw keypoints for debugging.
 
 ### Parameters
 
@@ -931,7 +940,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 ```
 
 - Mount `/app` to access frames and outputs
- - Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `placeholder`
+- Outputs `court.json` with `polygon`, `lines`, `homography`, `score`, `placeholder`
 
 CUDA example (requires rebuilding the image on a CUDA base and `--gpus all`):
 
@@ -940,7 +949,7 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames \
   --out-json   /app/court.json \
   --device cuda --weights /app/weights/tcd.pth \
-  --min-score 0.6 --stride 10
+  --min-score 0.6 --stride 10 --dump-heatmaps
 ```
 
 ### Parameters
@@ -955,6 +964,8 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
 | `--stride` | Process every Nth frame | `1` |
 | `--mask-thr` | Threshold for mask on normalized heatmaps (170/255 ≈ 0.67) | `0.67` |
 | `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
+| `--dump-heatmaps` | Write heatmap overlays next to frames | `false` |
+| `--dump-kps-json` | Write raw keypoints JSON (debug) | _none_ |
 
 Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`.
 

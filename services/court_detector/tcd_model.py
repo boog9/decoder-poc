@@ -9,52 +9,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Torch implementation of the official TCD network architecture.
-
-This module mirrors the reference model released with the Tennis Court Detector
-(TCD).  Layer names are kept intact so that the pretrained checkpoint from the
-original project can be loaded with ``strict=True``.
-"""
-
 from __future__ import annotations
-
 import torch
 import torch.nn as nn
 
-
 class ConvBlock(nn.Module):
-    """Convolution → ReLU → BatchNorm block."""
-
-    def __init__(
-        self,
-        cin: int,
-        cout: int,
-        k: int = 3,
-        pad: int = 1,
-        stride: int = 1,
-        bias: bool = True,
-    ) -> None:
+    def __init__(self, cin: int, cout: int, k: int = 3, pad: int = 1, stride: int = 1, bias: bool = True) -> None:
         super().__init__()
         self.block = nn.Sequential(
             nn.Conv2d(cin, cout, k, stride=stride, padding=pad, bias=bias),
             nn.ReLU(),
             nn.BatchNorm2d(cout),
         )
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the block."""
-
         return self.block(x)
 
-
 class BallTrackerNet(nn.Module):
-    """Full TCD network used for court detection.
-
-    Args:
-        out_channels: Number of output channels. The official model exposes
-            15 keypoint heatmaps.
-    """
-
     def __init__(self, out_channels: int = 15) -> None:
         super().__init__()
         self.conv1 = ConvBlock(3, 64)
@@ -83,33 +53,13 @@ class BallTrackerNet(nn.Module):
         self.conv18 = ConvBlock(64, out_channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass producing ``out_channels`` heatmaps."""
-
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.pool1(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.pool2(x)
-        x = self.conv5(x)
-        x = self.conv6(x)
-        x = self.conv7(x)
-        x = self.pool3(x)
-        x = self.conv8(x)
-        x = self.conv9(x)
-        x = self.conv10(x)
-        x = self.ups1(x)
-        x = self.conv11(x)
-        x = self.conv12(x)
-        x = self.conv13(x)
-        x = self.ups2(x)
-        x = self.conv14(x)
-        x = self.conv15(x)
-        x = self.ups3(x)
-        x = self.conv16(x)
-        x = self.conv17(x)
-        x = self.conv18(x)
+        x = self.conv1(x); x = self.conv2(x); x = self.pool1(x)
+        x = self.conv3(x); x = self.conv4(x); x = self.pool2(x)
+        x = self.conv5(x); x = self.conv6(x); x = self.conv7(x); x = self.pool3(x)
+        x = self.conv8(x); x = self.conv9(x); x = self.conv10(x); x = self.ups1(x)
+        x = self.conv11(x); x = self.conv12(x); x = self.conv13(x); x = self.ups2(x)
+        x = self.conv14(x); x = self.conv15(x); x = self.ups3(x)
+        x = self.conv16(x); x = self.conv17(x); x = self.conv18(x)
         return x
-
 
 __all__ = ["ConvBlock", "BallTrackerNet"]

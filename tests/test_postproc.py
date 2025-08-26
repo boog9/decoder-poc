@@ -12,6 +12,10 @@
 """Tests for :mod:`services.court_detector.postproc`."""
 
 import numpy as np
+import pytest
+
+if not hasattr(np, "ndarray"):
+    pytest.skip("numpy not available", allow_module_level=True)
 
 from services.court_detector.postproc import heat_to_peak_xy, refine_kps_if_needed
 
