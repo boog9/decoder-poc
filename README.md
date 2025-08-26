@@ -879,7 +879,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | `--mask-thr` | Threshold for mask on normalized heatmaps (170/255 ≈ 0.67) | `0.67` |
 | `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
 | `--dump-heatmaps` | Write heatmap overlays next to frames | `false` |
-| `--dump-kps-json` | Optional path to write raw keypoints per frame | _none_ |
+| `--dump-kps-json` | Write raw keypoints JSON (debug) | _none_ |
 | `--help` | Show CLI help | - |
 
 The output `court.json` has one entry per frame with optional lines and
@@ -1077,3 +1077,4 @@ Parameters:
 - `--mask-thr` (default: `0.67`): threshold on normalized heatmaps (`170/255`).
 - `--score-metric` (default: `max`): reserved for future use.
 - `--dump-heatmaps`: save heatmap overlays next to input frames.
+- `--dump-kps-json`: write raw keypoints JSON for debugging.

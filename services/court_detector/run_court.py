@@ -17,7 +17,6 @@ import argparse
 import glob
 import json
 import os
-import re
 from typing import List, Tuple
 
 import cv2
@@ -27,6 +26,19 @@ import torch
 from .tcd_model import BallTrackerNet
 from .utils_weights import load_tcd_state_dict
 from .postproc import heat_to_peak_xy, refine_kps_if_needed
+
+
+def _order_quad_tl_tr_br_bl(box: np.ndarray) -> np.ndarray:
+    """Упорядкувати 4 точки прямокутника: TL, TR, BR, BL."""
+
+    box = np.asarray(box, dtype=np.float32)
+    s = box.sum(axis=1)
+    diff = np.diff(box, axis=1).reshape(-1)
+    tl = box[np.argmin(s)]
+    br = box[np.argmax(s)]
+    tr = box[np.argmin(diff)]
+    bl = box[np.argmax(diff)]
+    return np.array([tl, tr, br, bl], dtype=np.float32)
 
 
 def preprocess_bgr(img: np.ndarray, device: torch.device) -> torch.Tensor:
@@ -83,7 +95,6 @@ def process_frames(
     low_thresh: int = 170,
     dump_heatmaps: bool = False,
     device: str = "cpu",
-    kp_json_path: str | None = None,
 ) -> None:
     """Run court detection on a directory of frames."""
 
@@ -97,28 +108,15 @@ def process_frames(
     model.load_state_dict(sd, strict=True)
     model.eval().to(dev)
 
-    patterns = [
-        "frame_*.png",
-        "frame_*.jpg",
-        "frame_*.jpeg",
-        "*.png",
-        "*.jpg",
-        "*.jpeg",
-    ]
+    # Беремо лише очікувані імена кадрів і уникаємо .heat.png
+    patterns = ["frame_*.png", "frame_*.jpg", "frame_*.jpeg"]
     frames: List[str] = []
     for pat in patterns:
         frames.extend(glob.glob(os.path.join(frames_dir, pat)))
-
-    def _natkey(p: str) -> List[int | str]:
-        """Key for natural sorting based on numeric suffix."""
-
-        b = os.path.basename(p)
-        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", b)]
-
-    frames = sorted(frames, key=_natkey)
+    # дедуп + сорт
+    frames = sorted(set(frames))
     if not frames:
-        print(f"[court][ERROR] No frames found in {frames_dir} (png/jpg)")
-        raise SystemExit(2)
+        raise FileNotFoundError(f"No frames found in {frames_dir} (png/jpg)")
     out = []
     all_kps: List[dict] = []
 
@@ -165,39 +163,53 @@ def process_frames(
             xk, yk = refine_kps_if_needed(img, xk, yk, k_idx=k)
             points.append((xk, yk))
 
-        H, poly = None, None
-        if H is None or poly is None:
+        # --- швидкий полігон з 14 kps (мінімальний робочий варіант для ROI) ---
+        valid = np.array(
+            [(x, y) for (x, y) in points if x is not None and y is not None],
+            dtype=np.float32,
+        )
+        if valid.shape[0] >= 4:
+            rect = cv2.minAreaRect(valid)  # ((cx,cy),(w,h),angle)
+            box = cv2.boxPoints(rect)  # 4x2 float
+            box = _order_quad_tl_tr_br_bl(box)
+            poly = [[int(p[0]), int(p[1])] for p in box]
+            score = float(valid.shape[0]) / 14.0
             out.append(
                 {
                     "frame": os.path.basename(fp),
-                    "polygon": [],
+                    "polygon": poly,
                     "lines": {},
-                    "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-                    "score": 0.0,
-                    "placeholder": True,
+                    "homography": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                    "score": score,
+                    "placeholder": False,
                 }
             )
         else:
             out.append(
                 {
                     "frame": os.path.basename(fp),
-                    "polygon": poly,
+                    "polygon": [],
                     "lines": {},
-                    "homography": H.tolist(),
-                    "score": 1.0,
-                    "placeholder": False,
+                    "homography": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                    "score": 0.0,
+                    "placeholder": True,
                 }
             )
+
+        # дамп для дебагу
         all_kps.append({"frame": os.path.basename(fp), "kps": points})
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
-    if kp_json_path:
-        with open(kp_json_path, "w", encoding="utf-8") as f:
-            json.dump(all_kps, f, indent=2)
     total = len(out)
     placeholders = sum(1 for it in out if it.get("placeholder", True))
     print(f"[court] frames={total} placeholders={placeholders} valid={total - placeholders}")
+
+    # опційний дамп ключ-поінтів
+    kp_path = os.environ.get("KP_JSON_PATH")
+    if kp_path:
+        with open(kp_path, "w", encoding="utf-8") as f:
+            json.dump(all_kps, f, indent=2)
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -229,7 +241,8 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument(
         "--dump-kps-json",
         dest="kp_json_path",
-        help="Optional path to write raw keypoints per frame",
+        default=None,
+        help="Write raw keypoints JSON (debug)",
     )
     return p
 
@@ -239,6 +252,10 @@ def main(args: List[str] | None = None) -> None:
 
     parser = build_argparser()
     ns = parser.parse_args(args)  # aliases already mapped via dest
+
+    # Передаємо шлях для дампу kps через env (щоб не міняти сигнатури далі)
+    if ns.kp_json_path:
+        os.environ["KP_JSON_PATH"] = ns.kp_json_path
     process_frames(
         frames_dir=ns.frames_dir,
         weights_path=ns.weights,
@@ -247,7 +264,6 @@ def main(args: List[str] | None = None) -> None:
         low_thresh=int(ns.mask_thr * 255),
         dump_heatmaps=ns.dump_heatmaps,
         device=ns.device,
-        kp_json_path=ns.kp_json_path,
     )
 
 
