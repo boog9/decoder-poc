@@ -863,7 +863,8 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 - Mount `/app` to access frames and outputs
 - GPU not required
 - Includes `loguru` (>=0.7.0) for logging
- - Provide `--weights /app/weights/tcd.pth`; real geometry is recommended for gating and line rendering.
+- Provide `--weights /app/weights/tcd.pth`; real geometry is recommended for gating and line rendering.
+- Frames are sorted naturally by numeric suffix (e.g. `frame_2` before `frame_10`).
 
 ### Parameters
 
@@ -874,13 +875,11 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
 | `--weights` | Path to `TennisCourtDetector` weights (e.g. `/app/weights/tcd.pth`) | _none_ |
 | `--device` | `cpu` or `cuda` execution device | `cpu` |
 | `--sample-rate` | Process every Nth frame | `1` |
-| `--min-score` | Minimum activation threshold | `0.55` |
-| `--mask-thr` | Threshold for mask on normalized heatmaps | `0.30` |
+| `--min-score` | Reserved for future use | `0.55` |
+| `--mask-thr` | Threshold for mask on normalized heatmaps (170/255 ≈ 0.67) | `0.67` |
 | `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
-| `--fallback` | Polygon for low-confidence frames (`last`, `full`, `detect`) | `last` |
-| `--interp` | Polygon interpolation for non-key frames (`hold`, `linear`) | `hold` |
-| `--smooth` | `none` or `ema` polygon smoothing | `none` |
-| `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
+| `--dump-heatmaps` | Write heatmap overlays next to frames | `false` |
+| `--dump-kps-json` | Optional path to write raw keypoints per frame | _none_ |
 | `--help` | Show CLI help | - |
 
 The output `court.json` has one entry per frame with optional lines and
@@ -898,8 +897,7 @@ homography:
 }
 ]
 ```
-Frames without a confident detection use the polygon selected by `--fallback`
-and are marked with `"placeholder": true`.
+Frames without a confident detection are marked with `"placeholder": true`.
 
 ## Court Calibration
 
@@ -953,20 +951,12 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-court:latest \
 | `--out-json` | Output path for court calibration data | **required** |
 | `--device` | `cuda` or `cpu` for detector execution | `cpu` |
 | `--weights` | Path to `tcd.pth` weights | **required** |
-| `--min-score` | Minimum detection confidence | `0.55` |
+| `--min-score` | Reserved for future use | `0.55` |
 | `--stride` | Process every Nth frame | `1` |
-| `--mask-thr` | Threshold for mask on normalized heatmaps | `0.30` |
+| `--mask-thr` | Threshold for mask on normalized heatmaps (170/255 ≈ 0.67) | `0.67` |
 | `--score-metric` | Score aggregation (`max`, `mean`, `area`, `auto`) | `max` |
-| `--fallback` | Polygon for low-confidence frames (`last`, `full`, `detect`) | `last` |
-| `--interp` | Polygon interpolation for non-key frames (`hold`, `linear`) | `hold` |
-| `--smooth` | Polygon smoothing method (`none` or `ema`) | `none` |
-| `--smooth-alpha` | EMA coefficient when smoothing | `0.3` |
 
 Aliases: `--output-json` for `--out-json`, `--sample-rate` for `--stride`.
-
-Frames with score below `--min-score` use the polygon selected by
-`--fallback` and are marked with `"placeholder": true`. Between valid frames,
-polygons are interpolated using `--interp`.
 
 ## Пайплан на перевірку (копіпаст і вперед)
 
@@ -1046,7 +1036,8 @@ DOCKER_BUILDKIT=1 docker build -f Dockerfile.court -t decoder-court:latest \
 
 # CUDA 12.1
 DOCKER_BUILDKIT=1 docker build -f Dockerfile.court -t decoder-court:cuda \
-  --build-arg TORCH_CHANNEL=cu121 .
+  --build-arg TORCH_CHANNEL=cu121 \
+  --build-arg PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu121 .
 ```
 
 ### Run inference
@@ -1057,8 +1048,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --output-json /app/court.json \
   --device cpu \
   --weights /app/weights/tcd.pth \
-  --min-score 0.55 \
-  --sample-rate 4
+  --sample-rate 1 --mask-thr 0.67
 ```
 
 > **Note:** if you see `pull access denied for decoder-court:cuda`, build the CUDA image locally first:
@@ -1073,19 +1063,17 @@ docker run --rm --gpus all -v "$(pwd)":/app decoder-court:cuda \
   --output-json /app/court.json \
   --device cuda \
   --weights /app/weights/tcd.pth \
-  --min-score 0.55 \
-  --sample-rate 4
+  --sample-rate 1 --mask-thr 0.67 --dump-heatmaps
 ```
 
 Parameters:
 
 - `--frames-dir` (required): directory with input frames.
 - `--output-json` (required): path for detections.
-- `--device` (default: `cpu`).
-- `--weights` (default: `/app/weights/tcd.pth`).
-- `--min-score` (default: `0.55`).
-- `--sample-rate` (default: `1`).
-- `--mask-thr` (default: `0.30`): threshold for mask on normalized heatmaps.
-- `--score-metric` (default: `max`): score aggregation (`max`, `mean`, `area`, `auto`).
-- `--fallback` (default: `last`): polygon to use when score < min-score (`last`, `full`, `detect`).
-- `--interp` (default: `hold`): polygon interpolation for non-key frames (`hold`, `linear`).
+- `--device` (default: `cpu`): execution device (`cpu` or `cuda`).
+- `--weights` (default: `/app/weights/tcd.pth`): path to model weights.
+- `--sample-rate` (default: `1`): process every Nth frame.
+- `--min-score` (default: `0.55`): reserved for future use.
+- `--mask-thr` (default: `0.67`): threshold on normalized heatmaps (`170/255`).
+- `--score-metric` (default: `max`): reserved for future use.
+- `--dump-heatmaps`: save heatmap overlays next to input frames.
