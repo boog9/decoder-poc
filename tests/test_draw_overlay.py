@@ -36,6 +36,10 @@ sys.modules.setdefault('cv2', cv2_dummy)
 class DummyPolygon:
     def __init__(self, pts: list[list[float]]) -> None:
         self.exterior = types.SimpleNamespace(coords=pts)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        self.bounds = (min(xs), min(ys), max(xs), max(ys))
+        self.area = (self.bounds[2] - self.bounds[0]) * (self.bounds[3] - self.bounds[1])
 
 
 geometry = types.SimpleNamespace(Polygon=DummyPolygon)
@@ -272,9 +276,16 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
         ]
     }
 
+    import importlib
+    import sys
+    sys.modules.pop("numpy", None)
+    real_np = importlib.import_module("numpy")
+    monkeypatch.setattr(dov, "np", real_np)
+
     class DummyCV2:
         def __init__(self) -> None:
-            self.thicknesses: List[int] = []
+            self.polylines_calls: List[int] = []
+            self.line_calls: List[int] = []
 
         def imread(self, path: str, flag=None):
             return types.SimpleNamespace(shape=(10, 10, 3))
@@ -283,12 +294,27 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
             return True
 
         def polylines(self, img, pts, is_closed, color, thickness):
-            self.thicknesses.append(thickness)
+            self.polylines_calls.append(thickness)
+
+        def line(self, img, pt1, pt2, color, thickness):
+            self.line_calls.append(thickness)
 
         def rectangle(self, *a, **k):
             pass
 
         def putText(self, *a, **k):
+            pass
+
+        def getPerspectiveTransform(self, src, dst):
+            return None
+
+        def perspectiveTransform(self, pts, h):
+            return pts
+
+        def fillPoly(self, *a, **k):
+            pass
+
+        def addWeighted(self, *a, **k):
             pass
 
         FONT_HERSHEY_SIMPLEX = 0
@@ -323,7 +349,8 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
         {},
     )
     assert res == 1
-    assert dummy.thicknesses == [2, 1]
+    assert dummy.polylines_calls == [2]
+    assert dummy.line_calls  # at least one line drawn
 
 
 def test_draw_overlay_skips_court_polygon_when_disabled(
@@ -498,6 +525,11 @@ def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytes
 
 
 def test_compute_court_lines_identity() -> None:
+    import importlib
+    import sys
+    sys.modules.pop("numpy", None)
+    real_np = importlib.import_module("numpy")
+    dov.np = real_np  # type: ignore[attr-defined]
     lines = dov._compute_court_lines([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
     assert "service_center" in lines
     assert lines["baseline_south"][0] == [0.0, 0.0]
