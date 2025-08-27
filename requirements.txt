@@ -1,3 +1,5 @@
+# Torch постачається базовим образом pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
+# Якщо колись знадобиться оновлення, робіть це в Dockerfile, а не тут.
 accelerate>=0.23.0
 click>=8.1
 cython_bbox>=0.1.3
