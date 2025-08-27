@@ -38,6 +38,11 @@ import cv2
 import numpy as np
 from PIL import Image
 
+try:  # pragma: no cover - optional dependency
+    from services.court_detector.court_reference_tcd import CourtReference
+except Exception:  # pragma: no cover - missing optional dep
+    CourtReference = None  # type: ignore
+
 LOGGER = logging.getLogger("draw_overlay")
 CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball", 100: "tennis_court"}
 PALETTE_SEED = 0
@@ -93,6 +98,16 @@ def _roi_is_frame(poly: "Polygon") -> bool:
     )
 
 
+def _is_identity(h: Any) -> bool:
+    """Return ``True`` if ``h`` is an identity 3x3 matrix."""
+
+    try:
+        mat = np.array(h, dtype=float)
+        return mat.shape == (3, 3) and np.allclose(mat, np.eye(3))
+    except Exception:
+        return True
+
+
 def _apply_h(pts: List[List[float]], h: List[List[float]]) -> List[List[float]]:
     """Project points via homography matrix.
 
@@ -134,6 +149,44 @@ def _compute_court_lines(h: List[List[float]]) -> Dict[str, List[List[float]]]:
         "center_mark_north": [[half_width, length], [half_width, length - mark_len]],
     }
     return {name: _apply_h(pts, h) for name, pts in layout.items()}
+
+
+def normalize_dets(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Normalize detection records to a common schema.
+
+    Args:
+        rec: Record potentially containing ``detections`` or ``det`` arrays.
+
+    Returns:
+        List of dictionaries with ``cls``, ``conf`` and ``bbox`` fields.
+    """
+
+    out: List[Dict[str, Any]] = []
+    arr = rec.get("detections")
+    if arr is None:
+        arr = rec.get("det")
+    if not arr:
+        return out
+    for d in arr:
+        if not isinstance(d, dict):
+            continue
+        cls_val = d.get("class", d.get("cls"))
+        conf_val = d.get("score", d.get("conf"))
+        box = d.get("bbox") or d.get("xyxy")
+        if box and len(box) == 4:
+            x1, y1, x2, y2 = map(int, box)
+            det_dict: Dict[str, Any] = {"bbox": [x1, y1, x2, y2]}
+            if cls_val is not None:
+                det_dict["cls"] = int(cls_val)
+                det_dict["class"] = int(cls_val)
+            if conf_val is not None:
+                det_dict["conf"] = float(conf_val)
+                det_dict["score"] = float(conf_val)
+            for key in ("polygon", "lines", "homography", "placeholder"):
+                if key in d:
+                    det_dict[key] = d[key]
+            out.append(det_dict)
+    return out
 
 
 
@@ -217,70 +270,25 @@ def _load_records(json_path: Path, keys: Tuple[str, ...]) -> Dict[str, List[dict
 
 
 def _load_detections(json_path: Path | None) -> Dict[str, List[dict]]:
-    """Load detections from ``json_path`` into frame mapping.
-
-    The loader is tolerant to multiple schema variants. It supports records of
-    the form ``{"frame": "name.png", "detections": [...]}`` as well as
-    ``{"frame": "name.png", "det": [...]}``. Individual detection items may
-    use either ``class``/``cls`` for the class identifier and ``score``/``conf``
-    for the confidence score.
-    """
+    """Load detections from ``json_path`` into frame mapping."""
 
     if json_path is None:
         return {}
     with json_path.open() as fh:
         data = json.load(fh)
-
     by_frame: Dict[str, List[dict]] = {}
     if not isinstance(data, list):
         return by_frame
-
-    if data and isinstance(data[0], dict) and (
-        "detections" in data[0] or "det" in data[0]
-    ):
-        # Nested per-frame schema
-        for rec in data:
-            if not isinstance(rec, dict):
-                continue
-            frame = rec.get("frame")
-            dets = rec.get("detections")
-            if dets is None:
-                dets = rec.get("det") or []
-            norm: List[dict] = []
-            for det in dets:
-                if not isinstance(det, dict):
-                    continue
-                cls_val = det.get("class", det.get("cls"))
-                conf_val = det.get("score", det.get("conf"))
-                bbox = det.get("bbox") or det.get("box")
-                if bbox and len(bbox) == 4:
-                    det_dict: Dict[str, Any] = {"bbox": bbox}
-                    if cls_val is not None:
-                        det_dict["class"] = int(cls_val)
-                    if conf_val is not None:
-                        det_dict["score"] = float(conf_val)
-                    norm.append(det_dict)
-            if frame is not None:
-                by_frame[str(frame)] = norm
-        return by_frame
-
-    # Flat schema
-    for det in data:
-        if not isinstance(det, dict):
+    for rec in data:
+        if not isinstance(rec, dict):
             continue
-        frame = det.get("frame")
-        if frame is None:
-            continue
-        cls_val = det.get("class", det.get("cls"))
-        conf_val = det.get("score", det.get("conf"))
-        bbox = det.get("bbox") or det.get("box")
-        if bbox and len(bbox) == 4:
-            det_dict: Dict[str, Any] = {"bbox": bbox}
-            if cls_val is not None:
-                det_dict["class"] = int(cls_val)
-            if conf_val is not None:
-                det_dict["score"] = float(conf_val)
-            by_frame.setdefault(str(frame), []).append(det_dict)
+        frame = rec.get("frame")
+        if "detections" in rec or "det" in rec:
+            norm = normalize_dets(rec)
+        else:
+            norm = normalize_dets({"detections": [rec]})
+        if frame is not None:
+            by_frame[str(frame)] = norm
     return by_frame
 
 
@@ -491,6 +499,55 @@ def _draw_axes(img: np.ndarray, h: List[List[float]], thickness: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Court line projection
+# ---------------------------------------------------------------------------
+
+
+def project_lines_with_H(img: np.ndarray, H: List[List[float]]) -> None:
+    """Project canonical court lines via homography ``H`` and draw on ``img``."""
+
+    polylines: List[List[Tuple[float, float]]] = []
+    if CourtReference is not None:  # pragma: no branch - optional
+        try:
+            court = CourtReference()
+            if hasattr(court, "segments"):
+                polylines = list(court.segments)  # type: ignore[arg-type]
+            elif hasattr(court, "lines"):
+                polylines = list(court.lines)  # type: ignore[arg-type]
+            elif hasattr(court, "paths"):
+                polylines = list(court.paths)  # type: ignore[arg-type]
+        except Exception:  # pragma: no cover - defensive
+            polylines = []
+    if not polylines:
+        L, Wd, Ws, S = 23.77, 10.973, 8.230, 6.40
+        doubles = [
+            (-Wd / 2, -L / 2),
+            (Wd / 2, -L / 2),
+            (Wd / 2, L / 2),
+            (-Wd / 2, L / 2),
+            (-Wd / 2, -L / 2),
+        ]
+        singles = [
+            (-Ws / 2, -L / 2),
+            (Ws / 2, -L / 2),
+            (Ws / 2, L / 2),
+            (-Ws / 2, L / 2),
+            (-Ws / 2, -L / 2),
+        ]
+        svc1 = [(-Ws / 2, -S), (Ws / 2, -S)]
+        svc2 = [(-Ws / 2, S), (Ws / 2, S)]
+        center = [(0.0, -S), (0.0, S)]
+        net = [(-Wd / 2, 0.0), (Wd / 2, 0.0)]
+        polylines = [doubles, singles, svc1, svc2, center, net]
+    Hmat = np.array(H, np.float32)
+    for line in polylines:
+        pts = np.array(line, np.float32).reshape(-1, 1, 2)
+        warped = cv2.perspectiveTransform(pts, Hmat).astype(np.int32)
+        closed = bool(np.allclose(line[0], line[-1]))
+        cv2.polylines(img, [warped], closed, (255, 255, 255), 2)
+
+
+# ---------------------------------------------------------------------------
 # Drawing logic
 # ---------------------------------------------------------------------------
 
@@ -594,18 +651,32 @@ def _draw_court(
 
     if not draw_lines:
         return
-    if not all(
-        hasattr(cv2, attr)
-        for attr in ("getPerspectiveTransform", "perspectiveTransform", "line")
-    ):
+    H = court_rec.get("homography")
+    if H and not _is_identity(H):
+        project_lines_with_H(img, H)
+        return
+    lines = court_rec.get("lines") or {}
+    if lines:
+        for line in lines.values():
+            try:
+                pts = np.array(line, dtype=np.float32)
+                if pts.shape[0] < 2:
+                    continue
+                p1 = tuple(int(round(v)) for v in pts[0])
+                for p in pts[1:]:
+                    p2 = tuple(int(round(v)) for v in p)
+                    cv2.line(img, p1, p2, (255, 255, 255), max(1, thickness // 2))
+                    p1 = p2
+            except Exception:
+                continue
         return
     try:
-        H = _unit_to_poly_H(np.asarray(pts, dtype=np.float32))
+        Htmp = _unit_to_poly_H(np.asarray(pts, dtype=np.float32))
         for a_uv, b_uv in _court_lines_uv():
-            ab = _warp_pts(H, np.array([a_uv, b_uv], dtype=np.float32))
+            ab = _warp_pts(Htmp, np.array([a_uv, b_uv], dtype=np.float32))
             a = tuple(int(round(v)) for v in ab[0])
             b = tuple(int(round(v)) for v in ab[1])
-            cv2.line(img, a, b, color, thickness)
+            cv2.line(img, a, b, (255, 255, 255), thickness)
     except Exception:
         return
 
@@ -675,49 +746,29 @@ def _draw_overlay(
         h, w = img.shape[:2]
         frame_roi = _get_frame_roi(idx, path, roi_map)
         frame_poly = roi_poly
-        frame_lines = roi_lines
         placeholder = False
         homography = None
         if frame_roi:
             if frame_roi.get("polygon"):
                 frame_poly = Polygon(frame_roi["polygon"])  # type: ignore[arg-type]
-            if frame_roi.get("lines"):
-                frame_lines = frame_roi.get("lines")
             homography = frame_roi.get("homography")
             placeholder = bool(frame_roi.get("placeholder"))
 
         out_path = output_dir / f"{path.stem}.{output_ext}"
 
-        if only_court and (frame_poly is None or _roi_is_frame(frame_poly)):
+        if roi_map and frame_poly is not None:
+            poly_pts = np.array(list(frame_poly.exterior.coords), np.float32)
+            filtered: List[dict] = []
             for det in dets:
-                if det.get("class") == COURT_CLASS_ID and det.get("polygon") and draw_court:
-                    pts = np.array(
-                        [[int(x), int(y)] for x, y in det["polygon"]], dtype=np.int32
-                    )
-                    cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
-                    if draw_court_lines and det.get("lines"):
-                        for line in det["lines"].values():
-                            lpts = np.array(
-                                [[int(x), int(y)] for x, y in line], dtype=np.int32
-                            )
-                            cv2.polylines(
-                                img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
-                            )
-                    break
-            if placeholder:
-                cv2.putText(
-                    img,
-                    "*",
-                    (5, int(20 * font_scale) + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    font_scale * 2.0,
-                    (0, 0, 255),
-                    max(1, thickness),
-                    cv2.LINE_AA,
-                )
-            if cv2.imwrite(str(out_path), img):
-                written += 1
-            continue  # tennis tuning
+                box = det.get("bbox")
+                if not box or len(box) != 4:
+                    continue
+                cx = (box[0] + box[2]) / 2.0
+                cy = (box[1] + box[3]) / 2.0
+                if cv2.pointPolygonTest(poly_pts, (cx, cy), False) > 0:
+                    filtered.append(det)
+            dets = filtered
+
         if (draw_court or draw_court_lines) and frame_poly is not None and not _roi_is_frame(frame_poly):
             crec = {
                 "polygon": frame_poly,
@@ -733,23 +784,33 @@ def _draw_overlay(
             )
             if draw_court_axes and homography:
                 _draw_axes(img, homography, thickness)
-            if only_court:
-                if placeholder:
-                    cv2.putText(
-                        img,
-                        "*",
-                        (5, int(20 * font_scale) + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        font_scale * 2.0,
-                        (0, 0, 255),
-                        max(1, thickness),
-                        cv2.LINE_AA,
-                    )
-                if cv2.imwrite(str(out_path), img):
-                    written += 1
-                continue  # tennis tuning
+
+        if only_court:
+            if placeholder:
+                cv2.putText(
+                    img,
+                    "*",
+                    (5, int(20 * font_scale) + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale * 2.0,
+                    (0, 0, 255),
+                    max(1, thickness),
+                    cv2.LINE_AA,
+                )
+            write_params: List[int] = []
+            if output_ext.lower() in {"jpg", "jpeg"}:
+                write_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+            if write_params:
+                ok = cv2.imwrite(str(out_path), img, write_params)
+            else:
+                ok = cv2.imwrite(str(out_path), img)
+            if ok:
+                LOGGER.info("frame %s saved to %s", path.name, out_path)
+                written += 1
+            continue
         for det in dets:
-            if det.get("class") == COURT_CLASS_ID and det.get("polygon"):
+            det_cls = det.get("class", det.get("cls"))
+            if det_cls == COURT_CLASS_ID and det.get("polygon"):
                 if draw_court or draw_court_lines:
                     _draw_court(
                         img,
@@ -761,10 +822,10 @@ def _draw_overlay(
                 if draw_court_axes and det.get("homography"):
                     _draw_axes(img, det["homography"], thickness)
                 continue
-            score = float(det.get("score", 0.0))
+            score = float(det.get("score", det.get("conf", 0.0)))
             if score < confidence_thr:
                 continue
-            cls_val = det.get("class", "")
+            cls_val = det.get("class", det.get("cls", ""))
             cname = _class_label(cls_val)
             cid: Optional[int]
             try:
@@ -803,7 +864,7 @@ def _draw_overlay(
                 text_bits.append(f"{score:.2f}")
             elif label:
                 text_bits.append(cname)
-                if det.get("score") is not None:
+                if det.get("score") is not None or det.get("conf") is not None:
                     text_bits.append(f"{score:.2f}")
             if text_bits:
                 text = "  ".join(text_bits)
@@ -828,10 +889,16 @@ def _draw_overlay(
                 max(1, thickness),
                 cv2.LINE_AA,
             )
-        if cv2.imwrite(str(out_path), img):
+        write_params: List[int] = []
+        if output_ext.lower() in {"jpg", "jpeg"}:
+            write_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+        if write_params:
+            ok = cv2.imwrite(str(out_path), img, write_params)
+        else:
+            ok = cv2.imwrite(str(out_path), img)
+        if ok:
+            LOGGER.info("frame %s saved to %s", path.name, out_path)
             written += 1
-            if written % 10 == 0 or written == 1:
-                LOGGER.info("frame %s saved to %s", path.name, out_path)
     LOGGER.info("Saved %d frame(s) to %s", written, output_dir)
     return written
 
@@ -1124,7 +1191,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-ext",
         default="png",
-        choices=["png", "jpg"],
+        choices=["png", "jpg", "jpeg"],
         help="Output image extension",
     )
     return parser.parse_args(argv)
