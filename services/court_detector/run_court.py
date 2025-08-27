@@ -24,8 +24,15 @@ def _order_quad_tl_tr_br_bl(box: np.ndarray) -> np.ndarray:
     tr = box[np.argmin(diff)]; bl = box[np.argmax(diff)]
     return np.array([tl, tr, br, bl], dtype=np.float32)
 
+W_IN, H_IN = 640, 360
+
+
 def preprocess_bgr(img: np.ndarray, device: torch.device) -> torch.Tensor:
-    rgb = cv2.cvtColor(cv2.resize(img, (640, 360)), cv2.COLOR_BGR2RGB).astype(np.float32)
+    """Resize BGR image to 640×360 and convert to [0,1] tensor."""
+
+    rgb = cv2.cvtColor(cv2.resize(img, (W_IN, H_IN)), cv2.COLOR_BGR2RGB).astype(
+        np.float32
+    )
     x = torch.from_numpy(rgb.transpose(2, 0, 1)).unsqueeze(0).to(device)
     return x / 255.0
 
@@ -67,6 +74,7 @@ def process_frames(frames_dir: str, weights_path: str, out_json: str,
             out.append({"frame": os.path.basename(fp), "polygon": [], "lines": {},
                         "homography": [[1,0,0],[0,1,0],[0,0,1]], "score": 0.0, "placeholder": True})
             continue
+        H0, W0 = img.shape[:2]
         x = preprocess_bgr(img, dev)
         with torch.inference_mode():
             hm = model(x)[0]
@@ -74,14 +82,26 @@ def process_frames(frames_dir: str, weights_path: str, out_json: str,
         if dump_heatmaps:
             save_heat_overlay(img, pred, fp + ".heat.png")
 
-        points: List[Tuple[int | None, int | None]] = []
+        points_360: List[Tuple[int | None, int | None]] = []
         for k in range(14):
             heat = (pred[k] * 255.0).astype(np.uint8)
             xk, yk = heat_to_peak_xy(heat, low_thresh=low_thresh, max_radius=25)
             xk, yk = refine_kps_if_needed(img, xk, yk, k_idx=k)
-            points.append((xk, yk))
+            points_360.append((xk, yk))
 
-        valid = np.array([(x, y) for (x, y) in points if x is not None and y is not None], dtype=np.float32)
+        # scale to native resolution
+        sx, sy = (W0 / float(W_IN)), (H0 / float(H_IN))
+        points_native: List[Tuple[int | None, int | None]] = []
+        for (xk, yk) in points_360:
+            if xk is None or yk is None:
+                points_native.append((None, None))
+            else:
+                points_native.append((int(round(xk * sx)), int(round(yk * sy))))
+
+        valid = np.array(
+            [(x, y) for (x, y) in points_native if x is not None and y is not None],
+            dtype=np.float32,
+        )
         if valid.shape[0] >= 4:
             rect = cv2.minAreaRect(valid)
             box = cv2.boxPoints(rect)
@@ -95,7 +115,11 @@ def process_frames(frames_dir: str, weights_path: str, out_json: str,
             out.append({"frame": os.path.basename(fp), "polygon": [], "lines": {},
                         "homography": [[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
                         "score": 0.0, "placeholder": True})
-        all_kps.append({"frame": os.path.basename(fp), "kps": points})
+        all_kps.append({
+            "frame": os.path.basename(fp),
+            "kps_native": points_native,
+            "kps_360": points_360,
+        })
 
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
