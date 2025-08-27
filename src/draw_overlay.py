@@ -38,6 +38,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
+try:  # pragma: no cover - optional dependency
+    from services.court_detector.homography_tcd import (
+        refer_kps as TCD_REFER_KPS,
+    )
+except Exception:  # pragma: no cover - fallback if module missing
+    TCD_REFER_KPS: List[List[float]] = []
+
 LOGGER = logging.getLogger("draw_overlay")
 CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball", 100: "tennis_court"}
 PALETTE_SEED = 0
@@ -220,10 +227,72 @@ def _load_records(json_path: Path, keys: Tuple[str, ...]) -> Dict[str, List[dict
     return result
 
 
-def _load_detections(json_path: Path) -> Dict[str, List[dict]]:
-    """Load detections from ``json_path`` into frame mapping."""
+def _load_detections(json_path: Path | None) -> Dict[str, List[dict]]:
+    """Load detections from ``json_path`` into frame mapping.
 
-    return _load_records(json_path, ("detections",))
+    The loader is tolerant to multiple schema variants. It supports records of
+    the form ``{"frame": "name.png", "detections": [...]}`` as well as
+    ``{"frame": "name.png", "det": [...]}``. Individual detection items may
+    use either ``class``/``cls`` for the class identifier and ``score``/``conf``
+    for the confidence score.
+    """
+
+    if json_path is None:
+        return {}
+    with json_path.open() as fh:
+        data = json.load(fh)
+
+    by_frame: Dict[str, List[dict]] = {}
+    if not isinstance(data, list):
+        return by_frame
+
+    if data and isinstance(data[0], dict) and (
+        "detections" in data[0] or "det" in data[0]
+    ):
+        # Nested per-frame schema
+        for rec in data:
+            if not isinstance(rec, dict):
+                continue
+            frame = rec.get("frame")
+            dets = rec.get("detections")
+            if dets is None:
+                dets = rec.get("det") or []
+            norm: List[dict] = []
+            for det in dets:
+                if not isinstance(det, dict):
+                    continue
+                cls_val = det.get("class", det.get("cls"))
+                conf_val = det.get("score", det.get("conf"))
+                bbox = det.get("bbox") or det.get("box")
+                if bbox and len(bbox) == 4:
+                    det_dict: Dict[str, Any] = {"bbox": bbox}
+                    if cls_val is not None:
+                        det_dict["class"] = int(cls_val)
+                    if conf_val is not None:
+                        det_dict["score"] = float(conf_val)
+                    norm.append(det_dict)
+            if frame is not None:
+                by_frame[str(frame)] = norm
+        return by_frame
+
+    # Flat schema
+    for det in data:
+        if not isinstance(det, dict):
+            continue
+        frame = det.get("frame")
+        if frame is None:
+            continue
+        cls_val = det.get("class", det.get("cls"))
+        conf_val = det.get("score", det.get("conf"))
+        bbox = det.get("bbox") or det.get("box")
+        if bbox and len(bbox) == 4:
+            det_dict: Dict[str, Any] = {"bbox": bbox}
+            if cls_val is not None:
+                det_dict["class"] = int(cls_val)
+            if conf_val is not None:
+                det_dict["score"] = float(conf_val)
+            by_frame.setdefault(str(frame), []).append(det_dict)
+    return by_frame
 
 
 def _load_tracks(json_path: Path) -> Dict[str, List[dict]]:
@@ -437,6 +506,77 @@ def _draw_axes(img: np.ndarray, h: List[List[float]], thickness: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _project_points(H: np.ndarray, pts: np.ndarray) -> np.ndarray:
+    """Project ``pts`` via homography ``H``.
+
+    Args:
+        H: ``3x3`` homography matrix.
+        pts: Array of shape ``(N, 2)`` in reference coordinates.
+
+    Returns:
+        Array of shape ``(N, 2)`` in image coordinates.
+    """
+
+    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 1, 2)
+    out = cv2.perspectiveTransform(pts, H)
+    return out.reshape(-1, 2)
+
+
+def _is_identity_H(H: Any) -> bool:
+    """Return ``True`` if ``H`` is close to identity."""
+
+    try:
+        arr = np.asarray(H, dtype=np.float32)
+    except Exception:
+        return True
+    return np.allclose(arr, np.eye(3, dtype=np.float32), atol=1e-6)
+
+
+def _draw_court(
+    img: np.ndarray,
+    court_rec: Dict[str, Any],
+    draw_lines: bool = True,
+    color: Tuple[int, int, int] = (0, 255, 0),
+    thickness: int = 2,
+) -> None:
+    """Draw court polygon and optional lines or reference keypoints."""
+
+    poly = court_rec.get("polygon") or []
+    H = court_rec.get("homography")
+    lines = court_rec.get("lines") or {}
+
+    if poly:
+        if hasattr(poly, "exterior"):
+            pts = np.asarray(list(poly.exterior.coords), np.int32).reshape(-1, 1, 2)
+        else:
+            pts = np.asarray(poly, np.int32).reshape(-1, 1, 2)
+        if len(pts) >= 4:
+            cv2.polylines(img, [pts], True, color, thickness)
+
+    if not draw_lines:
+        return
+
+    if lines:
+        for line in lines.values():
+            lpts = np.asarray([[int(x), int(y)] for x, y in line], dtype=np.int32)
+            cv2.polylines(img, [lpts], False, color, max(1, thickness // 2))
+        return
+
+    if H is not None and not _is_identity_H(H) and TCD_REFER_KPS:
+        Hm = np.asarray(H, dtype=np.float32)
+        ref = np.asarray(TCD_REFER_KPS, dtype=np.float32).reshape(-1, 2)
+        pts_img = _project_points(Hm, ref)
+        for x, y in pts_img:
+            cv2.circle(img, (int(round(x)), int(round(y))), 3, (0, 128, 255), -1)
+        x0, y0 = np.min(ref, axis=0)
+        x1, y1 = np.max(ref, axis=0)
+        rect_ref = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float32)
+        rect_img = _project_points(Hm, rect_ref).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(img, [rect_img], True, color, thickness)
+        return
+
+
+
 def _draw_overlay(
     frames_dir: Path,
     frame_map: Dict[str, List[dict]],
@@ -460,6 +600,8 @@ def _draw_overlay(
     only_court: bool,
     primary_map: Dict[int, int],
     draw_court_axes: bool = False,
+    save_stride: int = 1,
+    output_ext: str = "png",
 ) -> int:
     """Draw overlays for ``frame_map``.
 
@@ -478,6 +620,7 @@ def _draw_overlay(
     items.sort(key=lambda x: x[0])
 
     written = 0
+    frame_counter = 0
     for idx, path, dets in items:
         # guard rails for range selection
         if idx < start:
@@ -486,6 +629,10 @@ def _draw_overlay(
             continue
         if max_frames and written >= max_frames:
             break
+        if frame_counter % save_stride != 0:
+            frame_counter += 1
+            continue
+        frame_counter += 1
 
         img = _imread_safe(path)
         if img is None:
@@ -505,8 +652,7 @@ def _draw_overlay(
             homography = frame_roi.get("homography")
             placeholder = bool(frame_roi.get("placeholder"))
 
-        if draw_court_lines and (not frame_lines) and homography:
-            frame_lines = _compute_court_lines(homography)
+        out_path = output_dir / f"{path.stem}.{output_ext}"
 
         if only_court and (frame_poly is None or _roi_is_frame(frame_poly)):
             for det in dets:
@@ -535,22 +681,16 @@ def _draw_overlay(
                     max(1, thickness),
                     cv2.LINE_AA,
                 )
-            _imwrite(output_dir / path.name, img)
-            written += 1
+            if cv2.imwrite(str(out_path), img):
+                written += 1
             continue  # tennis tuning
         if draw_court and frame_poly is not None and not _roi_is_frame(frame_poly):
-            pts = np.array(
-                [[int(x), int(y)] for x, y in frame_poly.exterior.coords], dtype=np.int32
-            )
-            cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
-            if draw_court_lines and frame_lines:
-                for line in frame_lines.values():
-                    lpts = np.array(
-                        [[int(x), int(y)] for x, y in line], dtype=np.int32
-                    )
-                    cv2.polylines(
-                        img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
-                    )
+            crec = {
+                "polygon": frame_poly,
+                "lines": frame_lines,
+                "homography": homography,
+            }
+            _draw_court(img, crec, draw_lines=draw_court_lines, thickness=thickness)
             if draw_court_axes and homography:
                 _draw_axes(img, homography, thickness)
             if only_court:
@@ -565,8 +705,8 @@ def _draw_overlay(
                         max(1, thickness),
                         cv2.LINE_AA,
                     )
-                _imwrite(output_dir / path.name, img)
-                written += 1
+                if cv2.imwrite(str(out_path), img):
+                    written += 1
                 continue  # tennis tuning
         for det in dets:
             if det.get("class") == COURT_CLASS_ID and det.get("polygon"):
@@ -653,7 +793,6 @@ def _draw_overlay(
                 max(1, thickness),
                 cv2.LINE_AA,
             )
-        out_path = output_dir / path.name
         if cv2.imwrite(str(out_path), img):
             written += 1
             if written % 10 == 0 or written == 1:
@@ -941,6 +1080,18 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=0,
         help="Sticky ID label for main player (0=disabled)",
     )
+    parser.add_argument(
+        "--save-stride",
+        type=int,
+        default=1,
+        help="Save every Nth frame",
+    )
+    parser.add_argument(
+        "--output-ext",
+        default="png",
+        choices=["png", "jpg"],
+        help="Output image extension",
+    )
     return parser.parse_args(argv)
 
 
@@ -1042,6 +1193,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.only_court,
         primary_map,
         args.draw_court_axes,
+        args.save_stride,
+        args.output_ext,
     )
 
     if written == 0:
