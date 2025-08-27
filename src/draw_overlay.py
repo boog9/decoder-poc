@@ -38,13 +38,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-try:  # pragma: no cover - optional dependency
-    from services.court_detector.homography_tcd import (
-        refer_kps as TCD_REFER_KPS,
-    )
-except Exception:  # pragma: no cover - fallback if module missing
-    TCD_REFER_KPS: List[List[float]] = []
-
 LOGGER = logging.getLogger("draw_overlay")
 CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball", 100: "tennis_court"}
 PALETTE_SEED = 0
@@ -88,6 +81,8 @@ def _track_color(track_id: Optional[int]) -> Tuple[int, int, int]:
 def _roi_is_frame(poly: "Polygon") -> bool:
     """Return True if ``poly`` spans the entire frame."""  # tennis tuning
 
+    if not hasattr(poly, "bounds") or not hasattr(poly, "area"):
+        return False
     minx, miny, maxx, maxy = poly.bounds
     area = (maxx - minx) * (maxy - miny)
     return (
@@ -119,14 +114,7 @@ def _apply_h(pts: List[List[float]], h: List[List[float]]) -> List[List[float]]:
 
 
 def _compute_court_lines(h: List[List[float]]) -> Dict[str, List[List[float]]]:
-    """Compute standard ITF tennis court lines using ``homography``.
-
-    Args:
-        h: 3x3 homography mapping court coordinates (metres) to pixels.
-
-    Returns:
-        Mapping of line name to list of two endpoints in pixel coordinates.
-    """
+    """Compute simplified tennis court lines via homography ``h``."""
 
     width = 10.97
     length = 23.77
@@ -146,6 +134,7 @@ def _compute_court_lines(h: List[List[float]]) -> Dict[str, List[List[float]]]:
         "center_mark_north": [[half_width, length], [half_width, length - mark_len]],
     }
     return {name: _apply_h(pts, h) for name, pts in layout.items()}
+
 
 
 def _load_class_map(path: Path) -> Dict[int, str]:
@@ -506,73 +495,118 @@ def _draw_axes(img: np.ndarray, h: List[List[float]], thickness: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _project_points(H: np.ndarray, pts: np.ndarray) -> np.ndarray:
-    """Project ``pts`` via homography ``H``.
+def _order_quad(box: np.ndarray) -> np.ndarray:
+    """Return points ordered as TL, TR, BR, BL."""
 
-    Args:
-        H: ``3x3`` homography matrix.
-        pts: Array of shape ``(N, 2)`` in reference coordinates.
+    c = np.asarray(box, dtype=np.float32).reshape(-1, 2)
+    s = c.sum(axis=1)
+    d = np.diff(c, axis=1).reshape(-1)
+    tl = int(np.argmin(s))
+    br = int(np.argmax(s))
+    tr = int(np.argmin(d))
+    bl = int(np.argmax(d))
+    return np.array([c[tl], c[tr], c[br], c[bl]], np.float32)
 
-    Returns:
-        Array of shape ``(N, 2)`` in image coordinates.
-    """
 
-    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 1, 2)
+def _unit_to_poly_H(poly4: np.ndarray) -> np.ndarray:
+    """Perspective transform from unit square to ``poly4``."""
+
+    dst = _order_quad(poly4)
+    src = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], np.float32)
+    return cv2.getPerspectiveTransform(src, dst)
+
+
+def _warp_pts(H: np.ndarray, pts_uv: np.ndarray) -> np.ndarray:
+    """Apply homography ``H`` to ``pts_uv``."""
+
+    pts = pts_uv.reshape(-1, 1, 2).astype(np.float32)
     out = cv2.perspectiveTransform(pts, H)
     return out.reshape(-1, 2)
 
 
-def _is_identity_H(H: Any) -> bool:
-    """Return ``True`` if ``H`` is close to identity."""
+def _court_lines_uv() -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Return simplified court lines in unit-square coordinates."""
 
-    try:
-        arr = np.asarray(H, dtype=np.float32)
-    except Exception:
-        return True
-    return np.allclose(arr, np.eye(3, dtype=np.float32), atol=1e-6)
+    lines: List[Tuple[np.ndarray, np.ndarray]] = []
+    # outer rectangle
+    lines += [
+        (np.array([0.0, 0.0]), np.array([1.0, 0.0])),
+        (np.array([1.0, 0.0]), np.array([1.0, 1.0])),
+        (np.array([1.0, 1.0]), np.array([0.0, 1.0])),
+        (np.array([0.0, 1.0]), np.array([0.0, 0.0])),
+    ]
+    # net
+    lines.append((np.array([0.0, 0.5]), np.array([1.0, 0.5])))
+    # service lines
+    for v in (0.231, 0.769):
+        lines.append((np.array([0.125, v]), np.array([0.875, v])))
+    # singles sidelines
+    lines.append((np.array([0.125, 0.0]), np.array([0.125, 1.0])))
+    lines.append((np.array([0.875, 0.0]), np.array([0.875, 1.0])))
+    # center service line
+    lines.append((np.array([0.5, 0.231]), np.array([0.5, 0.769])))
+    return lines
 
 
 def _draw_court(
     img: np.ndarray,
     court_rec: Dict[str, Any],
     draw_lines: bool = True,
-    color: Tuple[int, int, int] = (0, 255, 0),
+    draw_poly: bool = True,
+    color: Tuple[int, int, int] = (0, 255, 255),
     thickness: int = 2,
+    alpha: float = 0.25,
 ) -> None:
-    """Draw court polygon and optional lines or reference keypoints."""
+    """Draw court polygon with optional simplified lines.
+
+    Args:
+        img: Image in BGR format.
+        court_rec: Record containing ``polygon`` and optional ``placeholder``.
+        draw_lines: Whether to draw court lines.
+        color: Line color in BGR.
+        thickness: Line thickness in pixels.
+        alpha: Transparency factor for polygon fill.
+    """
 
     poly = court_rec.get("polygon") or []
-    H = court_rec.get("homography")
-    lines = court_rec.get("lines") or {}
+    pts_src = list(poly.exterior.coords) if hasattr(poly, "exterior") else list(poly)
+    if court_rec.get("placeholder") or len(pts_src) < 4:
+        return
+    try:
+        pts = np.asarray(pts_src, dtype=np.float32)
+        pts_draw = np.asarray(pts_src, dtype=np.int32).reshape(-1, 1, 2)
+    except Exception:
+        pts = pts_src  # type: ignore[assignment]
+        pts_draw = pts_src  # type: ignore[assignment]
 
-    if poly:
-        if hasattr(poly, "exterior"):
-            pts = np.asarray(list(poly.exterior.coords), np.int32).reshape(-1, 1, 2)
-        else:
-            pts = np.asarray(poly, np.int32).reshape(-1, 1, 2)
-        if len(pts) >= 4:
-            cv2.polylines(img, [pts], True, color, thickness)
+    if draw_poly:
+        overlay = img.copy() if hasattr(img, "copy") else img
+        try:
+            if hasattr(cv2, "fillPoly"):
+                cv2.fillPoly(overlay, [pts_draw], color)
+            if hasattr(cv2, "addWeighted"):
+                cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, dst=img)
+            if hasattr(cv2, "polylines"):
+                cv2.polylines(img, [pts_draw], True, color, thickness)
+        except Exception:
+            if hasattr(cv2, "polylines"):
+                cv2.polylines(img, [pts_draw], True, color, thickness)
 
     if not draw_lines:
         return
-
-    if lines:
-        for line in lines.values():
-            lpts = np.asarray([[int(x), int(y)] for x, y in line], dtype=np.int32)
-            cv2.polylines(img, [lpts], False, color, max(1, thickness // 2))
+    if not all(
+        hasattr(cv2, attr)
+        for attr in ("getPerspectiveTransform", "perspectiveTransform", "line")
+    ):
         return
-
-    if H is not None and not _is_identity_H(H) and TCD_REFER_KPS:
-        Hm = np.asarray(H, dtype=np.float32)
-        ref = np.asarray(TCD_REFER_KPS, dtype=np.float32).reshape(-1, 2)
-        pts_img = _project_points(Hm, ref)
-        for x, y in pts_img:
-            cv2.circle(img, (int(round(x)), int(round(y))), 3, (0, 128, 255), -1)
-        x0, y0 = np.min(ref, axis=0)
-        x1, y1 = np.max(ref, axis=0)
-        rect_ref = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float32)
-        rect_img = _project_points(Hm, rect_ref).astype(np.int32).reshape(-1, 1, 2)
-        cv2.polylines(img, [rect_img], True, color, thickness)
+    try:
+        H = _unit_to_poly_H(np.asarray(pts, dtype=np.float32))
+        for a_uv, b_uv in _court_lines_uv():
+            ab = _warp_pts(H, np.array([a_uv, b_uv], dtype=np.float32))
+            a = tuple(int(round(v)) for v in ab[0])
+            b = tuple(int(round(v)) for v in ab[1])
+            cv2.line(img, a, b, color, thickness)
+    except Exception:
         return
 
 
@@ -684,13 +718,19 @@ def _draw_overlay(
             if cv2.imwrite(str(out_path), img):
                 written += 1
             continue  # tennis tuning
-        if draw_court and frame_poly is not None and not _roi_is_frame(frame_poly):
+        if (draw_court or draw_court_lines) and frame_poly is not None and not _roi_is_frame(frame_poly):
             crec = {
                 "polygon": frame_poly,
-                "lines": frame_lines,
                 "homography": homography,
+                "placeholder": placeholder,
             }
-            _draw_court(img, crec, draw_lines=draw_court_lines, thickness=thickness)
+            _draw_court(
+                img,
+                crec,
+                draw_lines=draw_court_lines,
+                draw_poly=draw_court,
+                thickness=thickness,
+            )
             if draw_court_axes and homography:
                 _draw_axes(img, homography, thickness)
             if only_court:
@@ -710,19 +750,14 @@ def _draw_overlay(
                 continue  # tennis tuning
         for det in dets:
             if det.get("class") == COURT_CLASS_ID and det.get("polygon"):
-                if draw_court:
-                    pts = np.array(
-                        [[int(x), int(y)] for x, y in det["polygon"]], dtype=np.int32
+                if draw_court or draw_court_lines:
+                    _draw_court(
+                        img,
+                        det,
+                        draw_lines=draw_court_lines,
+                        draw_poly=draw_court,
+                        thickness=thickness,
                     )
-                    cv2.polylines(img, [pts], True, (0, 255, 0), thickness)
-                if draw_court_lines and det.get("lines"):
-                    for line in det["lines"].values():
-                        lpts = np.array(
-                            [[int(x), int(y)] for x, y in line], dtype=np.int32
-                        )
-                        cv2.polylines(
-                            img, [lpts], False, (0, 255, 0), max(1, thickness // 2)
-                        )
                 if draw_court_axes and det.get("homography"):
                     _draw_axes(img, det["homography"], thickness)
                 continue
