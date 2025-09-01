@@ -312,12 +312,14 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
 
 # 3) track – softer thresholds, wider buffers, stitching & smoothing
 # IMPORTANT: pass --frames-dir to auto-enable appearance refine
-docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
-  track --detections-json /app/detections.json \
-        --output-json /app/tracks.json \
-        --frames-dir /app/frames \
-        --fps 30 --min-score 0.28 \
-        --pre-nms-iou 0.6 --pre-min-area-q 0.15 --pre-topk 3 --pre-court-gate \
+docker run --gpus all --rm -v "$(pwd)":/app \
+  --entrypoint python decoder-track:latest \
+  -m src.track \
+  --detections-json /app/detections.json \
+  --output-json /app/tracks.json \
+  --frames-dir /app/frames \
+  --fps 30 --min-score 0.28 \
+  --pre-nms-iou 0.6 --pre-min-area-q 0.15 --pre-topk 3 --pre-court-gate \
         --p-match-thresh 0.55 --p-track-buffer 160 --reid-reuse-window 150 \
         --b-match-thresh 0.55 --b-track-buffer 150 --color-sim-w 0.10 \
         --stitch --stitch-iou 0.55 --stitch-gap 12 \
@@ -531,10 +533,12 @@ YOLOX modules need to be built.
 Only detections with score above ``--min-score`` are considered.
 
 ```bash
-docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
-    track --detections-json /app/detections.json \
-          --output-json /app/tracks.json \
-          --min-score 0.30
+docker run --gpus all --rm -v "$(pwd)":/app \
+  --entrypoint python decoder-track:latest \
+  -m src.track \
+  --detections-json /app/detections.json \
+  --output-json /app/tracks.json \
+  --min-score 0.30
 ```
 
 * ``--detections-json`` – input file produced by the detection step.
@@ -747,28 +751,32 @@ This prints the number of invalid bounding boxes and low-confidence detections.
   The image sets ``PYTHONPATH`` before verifying the ByteTrack vendor to avoid
   ``ModuleNotFoundError`` during the build-time sanity check.
 
-- **Run:**
+  - **Run:**
 
-  ```bash
-  docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
-      track --detections-json /app/detections.json \
-            --output-json /app/tracks.json \
-            --fps 30 --min-score 0.10
-  ```
+    ```bash
+    docker run --gpus all --rm -v "$(pwd)":/app \
+      --entrypoint python decoder-track:latest \
+      -m src.track \
+      --detections-json /app/detections.json \
+      --output-json /app/tracks.json \
+      --fps 30 --min-score 0.10
+    ```
 
   **Enhanced example with pre/post processing:**
 
-  ```bash
-  docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
-      track --detections-json /app/detections.json \
-            --output-json /app/tracks.json \
-            --fps 30 --min-score 0.28 \
-            --pre-nms-iou 0.6 --pre-min-area-q 0.5 --pre-topk 3 --pre-court-gate \
-            --p-match-thresh 0.60 --p-track-buffer 125 --reid-reuse-window 125 \
-            --stitch --stitch-iou 0.55 --stitch-gap 5 \
-            --ball-max-area-q 0.01 --ball-max-accel 20000 --ball-max-speed 3000 \
-            --smooth ema --smooth-alpha 0.3
-  ```
+    ```bash
+    docker run --gpus all --rm -v "$(pwd)":/app \
+      --entrypoint python decoder-track:latest \
+      -m src.track \
+      --detections-json /app/detections.json \
+      --output-json /app/tracks.json \
+      --fps 30 --min-score 0.28 \
+      --pre-nms-iou 0.6 --pre-min-area-q 0.5 --pre-topk 3 --pre-court-gate \
+      --p-match-thresh 0.60 --p-track-buffer 125 --reid-reuse-window 125 \
+      --stitch --stitch-iou 0.55 --stitch-gap 5 \
+      --ball-max-area-q 0.01 --ball-max-accel 20000 --ball-max-speed 3000 \
+      --smooth ema --smooth-alpha 0.3
+    ```
 
   *Optional colour check:* add `--appearance-refine --appearance-lambda 0.3 --frames-dir /app/frames`.
 

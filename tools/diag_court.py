@@ -81,7 +81,17 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     top = sorted(entries, key=lambda x: x[1], reverse=True)[:25]
     lines = [f"{f}\t{e:.2f}\t{d:.3f}\n" for f, e, d in top]
-    Path("H_CHECK_TOP.txt").write_text("".join(lines))
+    # Пишемо файл поруч із court.json, атомарно та без проблем з правами
+    out_dir = Path(args.court).resolve().parent
+    out_path = out_dir / "H_CHECK_TOP.txt"
+    try:
+        if out_path.exists():
+            out_path.unlink()
+    except Exception:
+        pass
+    tmp = out_dir / ".tmp_H_CHECK_TOP.txt"
+    tmp.write_text("".join(lines), encoding="utf-8")
+    tmp.replace(out_path)
     return 0
 
 
