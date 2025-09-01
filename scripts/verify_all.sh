@@ -17,7 +17,7 @@ set -euo pipefail
 
 # ---------------------------- НАЛАШТУВАННЯ -------------------------------------
 UIDGID="$(id -u):$(id -g)"
-DOCKER_USER=${DOCKER_USER:---user "$(id -u):$(id -g)"}
+DOCKER_USER=${DOCKER_USER:---user "$(id -u):$(id -g)"}   # вимкніть, якщо ваші GPU-runtime не дружать з non-root
 
 FRAMES_DIR="${FRAMES_DIR:-$(pwd)/frames}"
 WEIGHTS_TCD="${WEIGHTS_TCD:-$(pwd)/weights/tcd.pth}"
@@ -55,6 +55,29 @@ check_space() {
 fix_permissions() {
   chown "$(id -u)":"$(id -g)" "$@" 2>/dev/null || true
   chmod 644 "$@" 2>/dev/null || true
+}
+
+# Визначаємо доступний entry для трекінгу:
+# 1) шукаємо Python-модуль серед кандидатів;
+# 2) якщо не знайшли — пробуємо консольний скрипт "track".
+pick_track_entry() {
+  local mod
+  mod="$(docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python decoder-track:latest - <<'PY' 2>/dev/null || true
+import importlib.util as I
+for c in ["src.track","src.track_objects","src.tracker","src.bytetrack","src.bytetrack_cli","src.run_tracker"]:
+    if I.find_spec(c):
+        print(c); break
+PY
+)"
+  if [ -n "$mod" ]; then
+    echo "MOD:${mod}"
+    return 0
+  fi
+  # Перевіряємо наявність CLI "track"
+  if docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint track decoder-track:latest --help >/dev/null 2>&1; then
+    echo "CLI:track"; return 0
+  fi
+  echo "NONE"; return 1
 }
 
 py_host() { python - "$@"; }
@@ -113,6 +136,13 @@ run_court_map() {
   summary_json "$COURT_BY_NAME"
 }
 
+# Друкуємо підказку щодо доступних режимів оверлею (не блокує пайплайн)
+overlay_modes_hint() {
+  echo "[HINT] draw_overlay --mode choices:"
+  docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+    decoder-track:latest -m src.draw_overlay --help 2>&1 | grep -E -- '--mode.*\{.*\}' || true
+}
+
 run_detect() {
   echo "[STEP] Detection -> ${DETECTIONS_JSON}"
   rm -f "$DETECTIONS_JSON"
@@ -147,13 +177,37 @@ PY
 run_track() {
   echo "[STEP] Tracking -> ${TRACKS_JSON}"
   rm -f "$TRACKS_JSON"
-  # Явно запускаємо модуль трекера, щоб не зловити ENTRYPOINT детектора
-  docker run --gpus all --rm $DOCKER_USER -v "$(pwd)":/app \
-    --entrypoint python decoder-track:latest \
-      -m src.track \
-      --detections-json /app/detections.json \
-      --output-json /app/tracks.json \
-      ${TRACK_FLAGS}
+  local entry; entry="$(pick_track_entry)"
+  case "$entry" in
+    MOD:*)
+      entry_mod="${entry#MOD:}"
+      echo "[INFO] using tracker module: ${entry_mod}"
+      docker run --gpus all --rm $DOCKER_USER -v "$(pwd)":/app \
+        --entrypoint python decoder-track:latest \
+          -m "${entry_mod}" \
+          --detections-json /app/detections.json \
+          --output-json /app/tracks.json \
+          ${TRACK_FLAGS}
+      ;;
+    CLI:track)
+      echo "[INFO] using tracker CLI: track"
+      docker run --gpus all --rm $DOCKER_USER -v "$(pwd)":/app \
+        --entrypoint track decoder-track:latest \
+          --detections-json /app/detections.json \
+          --output-json /app/tracks.json \
+          ${TRACK_FLAGS}
+      ;;
+    *)
+      echo "[ERROR] Не знайшов точку входу для трекінгу в decoder-track:latest" >&2
+      echo "[DEBUG] src/ доступні модулі в контейнері:" >&2
+      docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python decoder-track:latest - <<'PY' 2>/dev/null || true
+import pkgutil, json
+mods=[m.name for m in pkgutil.iter_modules(['src'])]
+print(json.dumps(mods, indent=2))
+PY
+      return 2
+      ;;
+  esac
   fix_permissions "$TRACKS_JSON"
   summary_json "$TRACKS_JSON"
 }
@@ -173,6 +227,8 @@ run_overlay() {
   [ -f "$PREVIEW_MP4" ] && fix_permissions "$PREVIEW_MP4"
   [ -d "$PREVIEW_DIR" ] && chmod -R a+r "$PREVIEW_DIR" 2>/dev/null || true
   ls -lh "$PREVIEW_MP4" 2>/dev/null || echo "[INFO] MP4 не створено (перевірте логи)"
+  # покажемо доступні режими — корисно для перевірки README/параметрів
+  overlay_modes_hint
 }
 
 # --------------------------------- MAIN ---------------------------------------
