@@ -31,7 +31,15 @@ cv2_dummy.FONT_HERSHEY_SIMPLEX = 0
 cv2_dummy.LINE_AA = 16
 sys.modules.setdefault('cv2', cv2_dummy)
 
-# Import canonical court model for tests
+# Import canonical court model for tests without heavy dependencies
+services_pkg = types.ModuleType("services")
+court_pkg = types.ModuleType("services.court_detector")
+court_pkg.__path__ = [
+    str(Path(__file__).resolve().parents[1] / "services" / "court_detector")
+]
+services_pkg.court_detector = court_pkg
+sys.modules.setdefault("services", services_pkg)
+sys.modules.setdefault("services.court_detector", court_pkg)
 from services.court_detector.court_reference_tcd import CANONICAL_LINES
 
 # Stub for shapely.geometry to avoid heavy dependency
@@ -703,3 +711,30 @@ def test_draw_overlay_placeholder_star(tmp_path: Path, monkeypatch: pytest.Monke
     )
     assert res == 1
     assert "*" in texts
+
+
+def test_flexible_bool_parsing(tmp_path: Path) -> None:
+    """Boolean flags accept both explicit and negated forms."""
+
+    base = ["--frames-dir", str(tmp_path), "--output-dir", str(tmp_path)]
+
+    assert dov.parse_args(base + ["--draw-court=false"]).draw_court is False
+    assert dov.parse_args(base + ["--draw-court", "false"]).draw_court is False
+    assert dov.parse_args(base + ["--draw-court"]).draw_court is True
+    assert dov.parse_args(base + ["--no-draw-court"]).draw_court is False
+
+    assert (
+        dov.parse_args(base + ["--draw-court-axes"]).draw_court_axes is True
+    )
+    assert (
+        dov.parse_args(base + ["--draw-court-axes=false"]).draw_court_axes is False
+    )
+
+    assert dov.parse_args(base + ["--only-court", "true"]).only_court is True
+    assert dov.parse_args(base + ["--no-only-court"]).only_court is False
+
+    defaults = dov.parse_args(base)
+    assert defaults.draw_court is True
+    assert defaults.draw_court_lines is True
+    assert defaults.draw_court_axes is False
+    assert defaults.only_court is False
