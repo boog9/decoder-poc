@@ -39,9 +39,9 @@ import numpy as np
 from PIL import Image
 
 try:  # pragma: no cover - optional dependency
-    from services.court_detector.court_reference_tcd import CourtReference
+    from services.court_detector.court_reference_tcd import CANONICAL_LINES
 except Exception:  # pragma: no cover - missing optional dep
-    CourtReference = None  # type: ignore
+    CANONICAL_LINES: List[List[Tuple[float, float]]] = []
 
 LOGGER = logging.getLogger("draw_overlay")
 CLASS_MAP: Dict[int, str] = {0: "person", 32: "sports ball", 100: "tennis_court"}
@@ -98,16 +98,6 @@ def _roi_is_frame(poly: "Polygon") -> bool:
     )
 
 
-def _is_identity(h: Any) -> bool:
-    """Return ``True`` if ``h`` is an identity 3x3 matrix."""
-
-    try:
-        mat = np.array(h, dtype=float)
-        return mat.shape == (3, 3) and np.allclose(mat, np.eye(3))
-    except Exception:
-        return True
-
-
 def _apply_h(pts: List[List[float]], h: List[List[float]]) -> List[List[float]]:
     """Project points via homography matrix.
 
@@ -129,26 +119,124 @@ def _apply_h(pts: List[List[float]], h: List[List[float]]) -> List[List[float]]:
 
 
 def _compute_court_lines(h: List[List[float]]) -> Dict[str, List[List[float]]]:
-    """Compute simplified tennis court lines via homography ``h``."""
+    """Project canonical court lines via homography ``h``.
 
-    width = 10.97
-    length = 23.77
-    half_width = width / 2.0
-    net_y = length / 2.0
-    service_offset = 6.40
-    mark_len = 0.1
-    south_y = net_y - service_offset
-    north_y = net_y + service_offset
-    layout = {
-        "baseline_south": [[0.0, 0.0], [width, 0.0]],
-        "baseline_north": [[0.0, length], [width, length]],
-        "service_south": [[0.0, south_y], [width, south_y]],
-        "service_north": [[0.0, north_y], [width, north_y]],
-        "service_center": [[half_width, south_y], [half_width, north_y]],
-        "center_mark_south": [[half_width, 0.0], [half_width, mark_len]],
-        "center_mark_north": [[half_width, length], [half_width, length - mark_len]],
-    }
-    return {name: _apply_h(pts, h) for name, pts in layout.items()}
+    This helper is intended for tests and debugging.
+
+    Args:
+        h: Homography mapping canonical ``[0,1]`` coordinates to image pixels.
+
+    Returns:
+        Mapping ``line_<idx>`` to projected polylines in image space.
+    """
+
+    if not CANONICAL_LINES:
+        return {}
+    H = np.array(h, np.float32)
+    out: Dict[str, List[List[float]]] = {}
+    for i, poly in enumerate(CANONICAL_LINES):
+        pts = np.array(poly, np.float32).reshape(-1, 1, 2)
+        if hasattr(cv2, "perspectiveTransform"):
+            prj = cv2.perspectiveTransform(pts, H).reshape(-1, 2)
+        else:  # pragma: no cover - cv2 minimal build
+            homog = np.concatenate([pts.reshape(-1, 2), np.ones((pts.shape[0], 1), np.float32)], axis=1)
+            prj = (homog @ H.T)
+            prj = prj[:, :2] / prj[:, 2:3]
+        out[f"line_{i}"] = prj.tolist()
+    return out
+
+
+def _order_poly(poly: Iterable[Iterable[float]]) -> np.ndarray:
+    """Return polygon points ordered TL, TR, BR, BL.
+
+    Args:
+        poly: Iterable of four ``(x, y)`` points.
+
+    Returns:
+        NumPy array of shape ``(4, 2)`` ordered top-left, top-right,
+        bottom-right, bottom-left.
+    """
+
+    P = np.asarray(list(poly), np.float32)
+    s = P.sum(1)
+    d = np.diff(P, axis=1).ravel()
+    tl, br, tr, bl = np.argmin(s), np.argmax(s), np.argmin(d), np.argmax(d)
+    return np.array([P[tl], P[tr], P[br], P[bl]], np.float32)
+
+
+def _ensure_H(rec: Dict[str, Any]) -> Optional[np.ndarray]:
+    """Return a valid homography matrix for ``rec``.
+
+    Prefers the ``homography`` field but falls back to computing it from a
+    ``polygon`` if necessary. The homography maps canonical court coordinates
+    ``[0,1]``×``[0,1]`` to image pixels.
+    """
+
+    try:
+        H = np.array(rec.get("homography", []), float)
+        ok = (
+            H.shape == (3, 3)
+            and np.isfinite(H).all()
+            and abs(float(np.linalg.det(H))) > 1e-6
+        )
+    except Exception:
+        return None
+    if not ok and len(rec.get("polygon", [])) == 4:
+        P = _order_poly(rec["polygon"])
+        ref = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], np.float32)
+        H = cv2.getPerspectiveTransform(ref, P)
+        ok = (
+            H.shape == (3, 3)
+            and np.isfinite(H).all()
+            and abs(float(np.linalg.det(H))) > 1e-6
+        )
+    return H if ok else None
+
+
+def _draw_canonical_lines(
+    img: np.ndarray, H: np.ndarray, color: Tuple[int, int, int], thickness: int
+) -> None:
+    """Draw canonical tennis court lines projected by ``H``."""
+
+    for poly in CANONICAL_LINES:
+        pts = np.array(poly, np.float32).reshape(-1, 1, 2)
+        prj = cv2.perspectiveTransform(pts, H).reshape(-1, 2).astype(int)
+        for a, b in zip(prj[:-1], prj[1:]):
+            cv2.line(img, tuple(a), tuple(b), color, thickness, cv2.LINE_AA)
+
+
+def _draw_diag_grid(
+    img: np.ndarray, H: np.ndarray, color: Tuple[int, int, int], thickness: int
+) -> None:
+    """Draw diagnostic grid in canonical space for debugging."""
+
+    pts = []
+    for t in np.linspace(0, 1, 11):
+        pts.append([(t, 0.0), (t, 1.0)])
+        pts.append([(0.0, t), (1.0, t)])
+    for poly in pts:
+        arr = np.array(poly, np.float32).reshape(-1, 1, 2)
+        prj = cv2.perspectiveTransform(arr, H).reshape(-1, 2).astype(int)
+        cv2.line(img, tuple(prj[0]), tuple(prj[1]), color, thickness, cv2.LINE_AA)
+
+
+def _project_and_draw_lines_dict(
+    img: np.ndarray,
+    lines: Dict[str, List[List[float]]],
+    H: np.ndarray,
+    color: Tuple[int, int, int],
+    thickness: int,
+) -> None:
+    """Project and draw a dictionary of lines via homography ``H``."""
+
+    for poly in lines.values():
+        pts = np.array(poly, np.float32).reshape(-1, 1, 2)
+        try:
+            prj = cv2.perspectiveTransform(pts, H).reshape(-1, 2).astype(int)
+        except Exception:
+            continue
+        for a, b in zip(prj[:-1], prj[1:]):
+            cv2.line(img, tuple(a), tuple(b), color, thickness, cv2.LINE_AA)
 
 
 def normalize_dets(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -477,11 +565,11 @@ def _parse_class_filter(value: Optional[str]) -> Tuple[set[str], set[int]]:
 
 def _draw_axes(img: np.ndarray, h: List[List[float]], thickness: int) -> None:
     """Draw small coordinate axes in opposite court corners."""
-
-    axes = [(0.0, 0.0), (10.97, 23.77)]
+    delta = 0.05
+    axes = [(0.0, 0.0), (1.0, 1.0)]
     for base in axes:
         p0, px, py = _apply_h(
-            [base, (base[0] + 1.0, base[1]), (base[0], base[1] + 1.0)], h
+            [base, (base[0] + delta, base[1]), (base[0], base[1] + delta)], h
         )
         x0, y0 = map(int, p0)
         x1, y1 = map(int, px)
@@ -496,115 +584,6 @@ def _draw_axes(img: np.ndarray, h: List[List[float]], thickness: int) -> None:
         else:  # pragma: no cover - minimal OpenCV builds
             cv2.line(img, (x0, y0), (x1, y1), (0, 0, 255), max(1, thickness // 2))
             cv2.line(img, (x0, y0), (x2, y2), (0, 255, 0), max(1, thickness // 2))
-
-
-# ---------------------------------------------------------------------------
-# Court line projection
-# ---------------------------------------------------------------------------
-
-
-def project_lines_with_H(img: np.ndarray, H: List[List[float]]) -> None:
-    """Project canonical court lines via homography ``H`` and draw on ``img``."""
-
-    polylines: List[List[Tuple[float, float]]] = []
-    if CourtReference is not None:  # pragma: no branch - optional
-        try:
-            court = CourtReference()
-            if hasattr(court, "segments"):
-                polylines = list(court.segments)  # type: ignore[arg-type]
-            elif hasattr(court, "lines"):
-                polylines = list(court.lines)  # type: ignore[arg-type]
-            elif hasattr(court, "paths"):
-                polylines = list(court.paths)  # type: ignore[arg-type]
-        except Exception:  # pragma: no cover - defensive
-            polylines = []
-    if not polylines:
-        L, Wd, Ws, S = 23.77, 10.973, 8.230, 6.40
-        doubles = [
-            (-Wd / 2, -L / 2),
-            (Wd / 2, -L / 2),
-            (Wd / 2, L / 2),
-            (-Wd / 2, L / 2),
-            (-Wd / 2, -L / 2),
-        ]
-        singles = [
-            (-Ws / 2, -L / 2),
-            (Ws / 2, -L / 2),
-            (Ws / 2, L / 2),
-            (-Ws / 2, L / 2),
-            (-Ws / 2, -L / 2),
-        ]
-        svc1 = [(-Ws / 2, -S), (Ws / 2, -S)]
-        svc2 = [(-Ws / 2, S), (Ws / 2, S)]
-        center = [(0.0, -S), (0.0, S)]
-        net = [(-Wd / 2, 0.0), (Wd / 2, 0.0)]
-        polylines = [doubles, singles, svc1, svc2, center, net]
-    Hmat = np.array(H, np.float32)
-    for line in polylines:
-        pts = np.array(line, np.float32).reshape(-1, 1, 2)
-        warped = cv2.perspectiveTransform(pts, Hmat).astype(np.int32)
-        closed = bool(np.allclose(line[0], line[-1]))
-        cv2.polylines(img, [warped], closed, (255, 255, 255), 2)
-
-
-# ---------------------------------------------------------------------------
-# Drawing logic
-# ---------------------------------------------------------------------------
-
-
-def _order_quad(box: np.ndarray) -> np.ndarray:
-    """Return points ordered as TL, TR, BR, BL."""
-
-    c = np.asarray(box, dtype=np.float32).reshape(-1, 2)
-    s = c.sum(axis=1)
-    d = np.diff(c, axis=1).reshape(-1)
-    tl = int(np.argmin(s))
-    br = int(np.argmax(s))
-    tr = int(np.argmin(d))
-    bl = int(np.argmax(d))
-    return np.array([c[tl], c[tr], c[br], c[bl]], np.float32)
-
-
-def _unit_to_poly_H(poly4: np.ndarray) -> np.ndarray:
-    """Perspective transform from unit square to ``poly4``."""
-
-    dst = _order_quad(poly4)
-    src = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], np.float32)
-    return cv2.getPerspectiveTransform(src, dst)
-
-
-def _warp_pts(H: np.ndarray, pts_uv: np.ndarray) -> np.ndarray:
-    """Apply homography ``H`` to ``pts_uv``."""
-
-    pts = pts_uv.reshape(-1, 1, 2).astype(np.float32)
-    out = cv2.perspectiveTransform(pts, H)
-    return out.reshape(-1, 2)
-
-
-def _court_lines_uv() -> List[Tuple[np.ndarray, np.ndarray]]:
-    """Return simplified court lines in unit-square coordinates."""
-
-    lines: List[Tuple[np.ndarray, np.ndarray]] = []
-    # outer rectangle
-    lines += [
-        (np.array([0.0, 0.0]), np.array([1.0, 0.0])),
-        (np.array([1.0, 0.0]), np.array([1.0, 1.0])),
-        (np.array([1.0, 1.0]), np.array([0.0, 1.0])),
-        (np.array([0.0, 1.0]), np.array([0.0, 0.0])),
-    ]
-    # net
-    lines.append((np.array([0.0, 0.5]), np.array([1.0, 0.5])))
-    # service lines
-    for v in (0.231, 0.769):
-        lines.append((np.array([0.125, v]), np.array([0.875, v])))
-    # singles sidelines
-    lines.append((np.array([0.125, 0.0]), np.array([0.125, 1.0])))
-    lines.append((np.array([0.875, 0.0]), np.array([0.875, 1.0])))
-    # center service line
-    lines.append((np.array([0.5, 0.231]), np.array([0.5, 0.769])))
-    return lines
-
-
 def _draw_court(
     img: np.ndarray,
     court_rec: Dict[str, Any],
@@ -613,27 +592,28 @@ def _draw_court(
     color: Tuple[int, int, int] = (0, 255, 255),
     thickness: int = 2,
     alpha: float = 0.25,
+    diag_grid: bool = False,
 ) -> None:
-    """Draw court polygon with optional simplified lines.
+    """Draw court polygon with optional canonical lines.
 
     Args:
         img: Image in BGR format.
-        court_rec: Record containing ``polygon`` and optional ``placeholder``.
+        court_rec: Record containing ``polygon`` and optional ``homography``.
         draw_lines: Whether to draw court lines.
+        draw_poly: Whether to draw the outer polygon.
         color: Line color in BGR.
         thickness: Line thickness in pixels.
         alpha: Transparency factor for polygon fill.
+        diag_grid: If ``True`` draw diagnostic grid instead of court lines.
     """
 
     poly = court_rec.get("polygon") or []
     pts_src = list(poly.exterior.coords) if hasattr(poly, "exterior") else list(poly)
-    if court_rec.get("placeholder") or len(pts_src) < 4:
+    if len(pts_src) < 4:
         return
     try:
-        pts = np.asarray(pts_src, dtype=np.float32)
         pts_draw = np.asarray(pts_src, dtype=np.int32).reshape(-1, 1, 2)
     except Exception:
-        pts = pts_src  # type: ignore[assignment]
         pts_draw = pts_src  # type: ignore[assignment]
 
     if draw_poly:
@@ -651,36 +631,20 @@ def _draw_court(
 
     if not draw_lines:
         return
-    H = court_rec.get("homography")
-    if H and not _is_identity(H):
-        project_lines_with_H(img, H)
-        return
-    lines = court_rec.get("lines") or {}
-    if lines:
-        for line in lines.values():
-            try:
-                pts = np.array(line, dtype=np.float32)
-                if pts.shape[0] < 2:
-                    continue
-                p1 = tuple(int(round(v)) for v in pts[0])
-                for p in pts[1:]:
-                    p2 = tuple(int(round(v)) for v in p)
-                    cv2.line(img, p1, p2, (255, 255, 255), max(1, thickness // 2))
-                    p1 = p2
-            except Exception:
-                continue
-        return
-    try:
-        Htmp = _unit_to_poly_H(np.asarray(pts, dtype=np.float32))
-        for a_uv, b_uv in _court_lines_uv():
-            ab = _warp_pts(Htmp, np.array([a_uv, b_uv], dtype=np.float32))
-            a = tuple(int(round(v)) for v in ab[0])
-            b = tuple(int(round(v)) for v in ab[1])
-            cv2.line(img, a, b, (255, 255, 255), thickness)
-    except Exception:
-        return
-
-
+    H = _ensure_H(court_rec)
+    lines = court_rec.get("lines") if isinstance(court_rec, dict) else None
+    if H is not None:
+        if diag_grid:
+            _draw_diag_grid(img, H, color, thickness)
+        elif lines:
+            _project_and_draw_lines_dict(img, lines, H, color, thickness)
+        else:
+            _draw_canonical_lines(img, H, color, thickness)
+    else:
+        if lines:
+            for poly in lines.values():
+                pts = np.asarray(poly, np.int32).reshape(-1, 1, 2)
+                cv2.polylines(img, [pts], False, color, max(1, thickness // 2), cv2.LINE_AA)
 
 def _draw_overlay(
     frames_dir: Path,
@@ -700,13 +664,13 @@ def _draw_overlay(
     draw_court: bool,
     draw_court_lines: bool,
     roi_poly: Polygon | None,
-    roi_lines: Dict[str, List[List[float]]] | None,
     roi_map: Dict[str, Dict[str, Any]] | None,
     only_court: bool,
     primary_map: Dict[int, int],
     draw_court_axes: bool = False,
     save_stride: int = 1,
     output_ext: str = "png",
+    diag_grid: bool = False,
 ) -> int:
     """Draw overlays for ``frame_map``.
 
@@ -769,10 +733,18 @@ def _draw_overlay(
                     filtered.append(det)
             dets = filtered
 
+        if roi_map:
+            dets = [
+                d
+                for d in dets
+                if not (d.get("class") == COURT_CLASS_ID and d.get("polygon"))
+            ]
+
         if (draw_court or draw_court_lines) and frame_poly is not None and not _roi_is_frame(frame_poly):
             crec = {
                 "polygon": frame_poly,
                 "homography": homography,
+                "lines": frame_roi.get("lines", {}) if frame_roi else {},
                 "placeholder": placeholder,
             }
             _draw_court(
@@ -781,6 +753,7 @@ def _draw_overlay(
                 draw_lines=draw_court_lines,
                 draw_poly=draw_court,
                 thickness=thickness,
+                diag_grid=diag_grid,
             )
             if draw_court_axes and homography:
                 _draw_axes(img, homography, thickness)
@@ -818,6 +791,7 @@ def _draw_overlay(
                         draw_lines=draw_court_lines,
                         draw_poly=draw_court,
                         thickness=thickness,
+                        diag_grid=diag_grid,
                     )
                 if draw_court_axes and det.get("homography"):
                     _draw_axes(img, det["homography"], thickness)
@@ -1108,9 +1082,14 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tracks-json", type=Path, help="Tracks JSON file")
     parser.add_argument(
         "--mode",
-        choices=["auto", "class", "track", "detect"],
-        default="auto",
-        help="Overlay mode (default: auto)",
+        choices=["detect", "track", "class", "roi"],
+        default="detect",
+        help="Overlay mode",
+    )
+    parser.add_argument(
+        "--diag-grid",
+        action="store_true",
+        help="Draw diagnostic grid instead of canonical lines (debug)",
     )
     parser.add_argument(
         "--label", action="store_true", help="Draw class labels and scores"
@@ -1169,7 +1148,11 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=23,
         help="CRF for libx264; set -1 to disable",
     )
-    parser.add_argument("--roi-json", type=Path, help="Court ROI polygon JSON")
+    parser.add_argument(
+        "--roi-json",
+        type=Path,
+        help="ROI polygon JSON or court.json (per-frame entries)",
+    )
     parser.add_argument(
         "--only-court",
         action=argparse.BooleanOptionalAction,
@@ -1203,22 +1186,22 @@ def main(argv: Iterable[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     args = parse_args(argv)
 
-    if args.mode == "auto":
-        if args.tracks_json and args.tracks_json.exists():
-            mode = "track"
-        elif args.detections_json and args.detections_json.exists():
-            mode = "class"
-        else:
-            LOGGER.error("No detections or tracks JSON provided")
-            return 1
-    else:
-        mode = args.mode
+    mode = args.mode
+
+    roi_path = args.roi_json
+    if roi_path is None:
+        default_court = Path.cwd() / "court.json"
+        if default_court.exists():
+            roi_path = default_court
 
     if mode in {"class", "detect"} and not args.detections_json:
-        LOGGER.error("--detections-json required for class/detect mode")
+        LOGGER.error("--detections-json required for detect/class modes")
         return 1
     if mode == "track" and not args.tracks_json:
         LOGGER.error("--tracks-json required for track mode")
+        return 1
+    if mode == "roi" and roi_path is None:
+        LOGGER.error("--roi-json required for roi mode")
         return 1
 
     global PALETTE_SEED, CLASS_MAP
@@ -1230,7 +1213,11 @@ def main(argv: Iterable[str] | None = None) -> int:
             LOGGER.error("Failed to load class map: %s", exc)
             return 1
 
-    if mode in {"class", "detect"}:
+    roi_map: Optional[Dict[str, Dict[str, Any]]] = None
+    if mode == "roi":
+        roi_map = _load_roi_map(roi_path) if roi_path else {}
+        frame_map = {k: [] for k in roi_map.keys()}
+    elif mode in {"class", "detect"}:
         frame_map = _load_detections(args.detections_json)
     else:
         frame_map = _load_tracks(args.tracks_json)
@@ -1243,16 +1230,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     allowed_names, allowed_ids = _parse_class_filter(args.only_class)
 
     roi_poly: Optional[Polygon] = None
-    roi_lines: Optional[Dict[str, List[List[float]]]] = None
-    roi_map: Optional[Dict[str, Dict[str, Any]]] = None
-    if args.roi_json:
-        roi_map = _load_roi_map(args.roi_json)
+    if roi_path:
+        roi_map = roi_map or _load_roi_map(roi_path)
         if roi_map:
             first = next(iter(roi_map.values()))
             if first.get("polygon"):
                 roi_poly = Polygon(first.get("polygon"))  # type: ignore[arg-type]
-            if first.get("lines"):
-                roi_lines = first.get("lines")
 
     primary_map: Dict[int, int] = {}
     if mode == "track" and args.primary_id_stick > 0:
@@ -1290,13 +1273,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.draw_court,
         args.draw_court_lines,
         roi_poly,
-        roi_lines,
         roi_map,
         args.only_court,
         primary_map,
         args.draw_court_axes,
         args.save_stride,
         args.output_ext,
+        args.diag_grid,
     )
 
     if written == 0:

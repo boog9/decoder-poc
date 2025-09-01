@@ -22,7 +22,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
-np.int32 = int
 
 cv2_dummy = types.ModuleType("cv2")
 cv2_dummy.imread = lambda *a, **k: None
