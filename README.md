@@ -249,6 +249,36 @@ This prints RMSE and determinant summaries and writes the top 25 worst frames to
 `H_CHECK_TOP.txt`.
 
 
+### Court→Frame mapping (robust)
+
+- **Image:** `decoder-track`
+- **Purpose:** map court records to frame files with atomic writes and friendly permissions.
+- **GPU:** not required
+- **Parameters:**
+  - `FRAMES_DIR` (default `/app/frames`)
+  - `COURT_JSON` (default `/app/court.json`)
+  - `OUT_JSON` (default `/app/court_by_name.json`)
+
+```bash
+# writes /app/court_by_name.json with safe permissions
+scripts/run_court_map.sh
+
+# or run directly
+docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)":/app \
+  -e FRAMES_DIR=/app/frames \
+  -e COURT_JSON=/app/court.json \
+  -e OUT_JSON=/app/court_by_name.json \
+  --entrypoint python decoder-track:latest /app/tools/map_court_by_name.py
+```
+
+If you encounter permission issues:
+
+```bash
+ls -l court_by_name.json
+chmod 644 court_by_name.json  # adjust as needed
+```
+
+
 Before running the enhancement script, install the Python dependencies. Ensure
 that ``python`` and ``pip`` come from the same environment:
 
