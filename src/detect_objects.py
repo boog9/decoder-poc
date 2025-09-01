@@ -1342,11 +1342,16 @@ def _run_multi_scale(args: argparse.Namespace) -> None:
 
     out = args.output_json or (Path.cwd() / "detections_ms.json")
     save_json(merged_rows, out)
+
+    # Correct summary log for multi-scale
+    n_frames = len(merged_rows)
+    ms_count = len(passes)
+    n_passes = ms_count * (2 if getattr(args, "two_pass", False) else 1)
     logger.info(
         "Multi-scale detection saved to %s (%d frames, %d passes)",
         out,
-        len(merged_rows),
-        sum(1 for p in passes if p.type == "full"),
+        n_frames,
+        n_passes,
     )
 
 

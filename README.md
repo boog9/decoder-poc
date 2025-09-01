@@ -242,6 +242,24 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   -m src.draw_overlay --help | grep -E -- '--mode.*\{.*\}'
 ```
 
+#### ROI-only rendering
+
+Save only court/ROI outlines (frames + MP4):
+
+```bash
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --frames-dir /app/frames \
+  --output-dir /app/preview_court \
+  --only-court --draw-court-lines \
+  --roi-json /app/court.json \
+  --export-mp4 /app/preview_court.mp4 \
+  --fps 30 --crf 18
+```
+> Full pipeline does track overlay and ROI overlay:
+> bash scripts/verify_all.sh
+
+
 ### Court diagnostics
 
 After running `decoder-court`, basic homography quality stats can be obtained

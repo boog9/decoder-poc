@@ -31,6 +31,10 @@ TRACKS_JSON="${OUT_DIR}/tracks.json"
 PREVIEW_DIR="${OUT_DIR}/preview_tracks"
 PREVIEW_MP4="${OUT_DIR}/preview_tracks.mp4"
 
+# ROI-only previews
+PREVIEW_COURT_DIR="${OUT_DIR}/preview_court"
+PREVIEW_COURT_MP4="${OUT_DIR}/preview_court.mp4"
+
 # Параметри моделей (узгоджено з останніми комітами/логами)
 DETECT_FLAGS=${DETECT_FLAGS:-"--two-pass --nms-class-aware --multi-scale on --img-size 1536 --p-conf 0.30 --b-conf 0.05 --p-nms 0.60 --b-nms 0.70 --roi-json /app/court.json --roi-margin 8"}
 TRACK_FLAGS=${TRACK_FLAGS:-"--fps ${FPS} --min-score 0.10"}
@@ -231,6 +235,33 @@ run_overlay() {
   overlay_modes_hint
 }
 
+# ---- КРОК 6: ROI-only overlay (кадри + MP4) ----------------------------------
+run_roi_overlay() {
+  echo "[STEP] ROI overlay -> ${PREVIEW_COURT_DIR} + ${PREVIEW_COURT_MP4}"
+  rm -rf "$PREVIEW_COURT_DIR" "$PREVIEW_COURT_MP4"
+
+  # лише контур майданчика, лінії та ROI; без треків/детекцій
+  docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+    decoder-track:latest \
+      -m src.draw_overlay \
+      --frames-dir /app/frames \
+      --output-dir /app/preview_court \
+      --only-court \
+      --draw-court-lines \
+      --roi-json /app/court.json \
+      --export-mp4 /app/preview_court.mp4 \
+      --fps ${FPS} --crf 18
+
+  # права доступу
+  if [ -f "$PREVIEW_COURT_MP4" ]; then fix_permissions "$PREVIEW_COURT_MP4"; fi
+  if [ -d "$PREVIEW_COURT_DIR" ]; then chmod -R a+r "$PREVIEW_COURT_DIR" 2>/dev/null || true; fi
+
+  # коротке зведення
+  if [ -f "$PREVIEW_COURT_MP4" ]; then
+    echo "[summary] ROI mp4:"; ls -lh "$PREVIEW_COURT_MP4"
+  fi
+}
+
 # --------------------------------- MAIN ---------------------------------------
 check_prereqs
 check_space
@@ -240,4 +271,5 @@ run_court_map
 run_detect
 run_track
 run_overlay
+run_roi_overlay
 echo "[OK] Пайплайн завершено"
