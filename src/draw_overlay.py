@@ -54,6 +54,46 @@ COURT_CLASS_ID = 100
 # ---------------------------------------------------------------------------
 
 
+class FlexibleBool(argparse.Action):
+    """Boolean flag that supports both value and ``--no-`` forms.
+
+    Examples:
+        ``--flag`` → ``True``
+        ``--flag=false`` or ``--flag false`` → ``False``
+        ``--no-flag`` → ``False`` (value ignored)
+    """
+
+    TRUE_SET = {"1", "true", "t", "yes", "y", "on"}
+    FALSE_SET = {"0", "false", "f", "no", "n", "off"}
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any | None,
+        option_string: str | None = None,
+    ) -> None:
+        """Set destination value based on ``values`` and ``option_string``."""
+
+        if option_string and option_string.startswith("--no-"):
+            setattr(namespace, self.dest, False)
+            return
+
+        if values is None:
+            setattr(namespace, self.dest, True)
+            return
+
+        v = str(values).strip().lower()
+        if v in self.TRUE_SET:
+            setattr(namespace, self.dest, True)
+        elif v in self.FALSE_SET:
+            setattr(namespace, self.dest, False)
+        else:  # pragma: no cover - argparse already guards
+            parser.error(
+                f"{option_string} expects a boolean (true/false), got {values!r}"
+            )
+
+
 def _class_label(value: int | str) -> str:
     """Return human readable class label."""
 
@@ -1097,21 +1137,30 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--id", action="store_true", help="Draw track IDs")
     parser.add_argument(
         "--draw-court",
-        action=argparse.BooleanOptionalAction,
+        "--no-draw-court",
+        dest="draw_court",
+        nargs="?",
         default=True,
-        help="Draw tennis court polygon",
+        action=FlexibleBool,
+        help="Draw tennis court polygon (accepts true/false; also supports --no-draw-court).",
     )
     parser.add_argument(
         "--draw-court-lines",
-        action=argparse.BooleanOptionalAction,
+        "--no-draw-court-lines",
+        dest="draw_court_lines",
+        nargs="?",
         default=True,
-        help="Draw internal court lines when available",
+        action=FlexibleBool,
+        help="Draw internal court lines (accepts true/false; also supports --no-draw-court-lines).",
     )
     parser.add_argument(
         "--draw-court-axes",
-        action=argparse.BooleanOptionalAction,
+        "--no-draw-court-axes",
+        dest="draw_court_axes",
+        nargs="?",
         default=False,
-        help="Draw small court axes when homography is known",
+        action=FlexibleBool,
+        help="Draw small court axes (accepts true/false; also supports --no-draw-court-axes).",
     )
     parser.add_argument(
         "--confidence-thr", type=float, default=0.0, help="Minimum score threshold"
@@ -1155,9 +1204,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--only-court",
-        action=argparse.BooleanOptionalAction,
+        "--no-only-court",
+        dest="only_court",
+        nargs="?",
         default=False,
-        help="Draw only the court contour",  # tennis tuning
+        action=FlexibleBool,
+        help="Draw only the court contour (accepts true/false; also supports --no-only-court).",
     )
     parser.add_argument(
         "--primary-id-stick",
