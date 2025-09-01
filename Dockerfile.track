@@ -42,4 +42,6 @@ from bytetrack_vendor.tracker.byte_tracker import BYTETracker
 print('BYTETracker import OK', BYTETracker is not None)
 PY
 
-ENTRYPOINT ["python", "-m", "src.detect_objects"]
+# Коректний ENTRYPOINT для образу трекера.
+# Для одноразових команд можна перевизначити через --entrypoint.
+ENTRYPOINT ["python","-m","src.track"]
