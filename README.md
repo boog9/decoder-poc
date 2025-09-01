@@ -394,14 +394,14 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --output-dir /app/preview_tracks \
   --draw-court --draw-court-lines --roi-json /app/court.json
 
-# Optional MP4 export (25 fps)
+# Optional MP4 export (30 fps)
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   -m src.draw_overlay \
   --mode track \
   --frames-dir /app/frames \
   --tracks-json /app/tracks.json \
   --output-dir /app/preview_tracks \
-  --export-mp4 /app/preview_tracks.mp4 --fps 25 --draw-court --draw-court-lines --roi-json /app/court.json
+  --export-mp4 /app/preview_tracks.mp4 --fps 30 --draw-court --draw-court-lines --roi-json /app/court.json
 
 # Disable CRF if ffmpeg lacks support
 docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
@@ -410,7 +410,7 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --frames-dir /app/frames \
   --tracks-json /app/tracks.json \
   --output-dir /app/preview_tracks \
-  --export-mp4 /app/preview_tracks.mp4 --fps 25 --crf -1 --draw-court --draw-court-lines --roi-json /app/court.json
+  --export-mp4 /app/preview_tracks.mp4 --fps 30 --crf -1 --draw-court --draw-court-lines --roi-json /app/court.json
 ```
 
 If your ffmpeg build does not support `-crf`, use `--crf -1` or install a full
@@ -424,7 +424,7 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
     --mode track --frames-dir /app/frames \
     --tracks-json /app/tracks.json \
     --output-dir /app/preview_tracks \
-    --export-mp4 /app/preview_tracks.mp4 --fps 25 \
+    --export-mp4 /app/preview_tracks.mp4 --fps 30 \
     --draw-court --draw-court-lines --roi-json /app/court.json
 ```
 
@@ -1112,7 +1112,7 @@ docker run --gpus all --rm -v "$(pwd)":/app decoder-track:latest \
       --frames-dir /app/frames \
       --tracks-json /app/tracks.json \
       --output-dir /app/preview_tracks \
-      --export-mp4 /app/preview_tracks.mp4 --fps 25 \
+      --export-mp4 /app/preview_tracks.mp4 --fps 30 \
       --draw-court --draw-court-lines --roi-json /app/court.json
 
 If your ffmpeg build does not support `-crf`, add `--crf -1` or install a full

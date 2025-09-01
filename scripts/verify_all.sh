@@ -22,6 +22,8 @@ DOCKER_USER=${DOCKER_USER:---user "$(id -u):$(id -g)"}   # вимкніть, я�
 FRAMES_DIR="${FRAMES_DIR:-$(pwd)/frames}"
 WEIGHTS_TCD="${WEIGHTS_TCD:-$(pwd)/weights/tcd.pth}"
 FPS="${FPS:-30}"
+FPS_MP4="${FPS_MP4:-30}"   # default MP4 export FPS
+CRF="${CRF:-18}"           # default CRF; falls back to -1 if unsupported
 
 OUT_DIR="$(pwd)"
 COURT_JSON="${OUT_DIR}/court.json"
@@ -217,21 +219,53 @@ PY
 }
 
 run_overlay() {
-  echo "[STEP] Overlay rendering -> ${PREVIEW_DIR} + ${PREVIEW_MP4}"
+  echo "[STEP] Tracks overlay (PNGs) -> ${PREVIEW_DIR}"
   rm -rf "$PREVIEW_DIR" "$PREVIEW_MP4"
+
+  # 1) Рендер PNG-кадрів (track overlay)
   docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
     decoder-track:latest \
       -m src.draw_overlay \
+      --mode track \
+      --frames-dir /app/frames \
+      --tracks-json /app/tracks.json \
+      --output-dir /app/preview_tracks \
+      --draw-court --draw-court-lines --roi-json /app/court.json
+
+  [ -d "$PREVIEW_DIR" ] && chmod -R a+r "$PREVIEW_DIR" 2>/dev/null || true
+
+  # 2) Опційний експорт у MP4 (30 fps). Якщо CRF недоступний — фолбек на --crf -1
+  echo "[STEP] Tracks overlay (MP4) -> ${PREVIEW_MP4}"
+  set +e
+  docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+    decoder-track:latest \
+      -m src.draw_overlay \
+      --mode track \
       --frames-dir /app/frames \
       --tracks-json /app/tracks.json \
       --output-dir /app/preview_tracks \
       --export-mp4 /app/preview_tracks.mp4 \
-      --fps ${FPS} --crf 18 \
-      ${DRAW_FLAGS}
+      --fps "${FPS_MP4}" --crf "${CRF}" \
+      --draw-court --draw-court-lines --roi-json /app/court.json
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "[WARN] ffmpeg CRF може бути недоступний — повторюємо з --crf -1"
+    docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+      decoder-track:latest \
+        -m src.draw_overlay \
+        --mode track \
+        --frames-dir /app/frames \
+        --tracks-json /app/tracks.json \
+        --output-dir /app/preview_tracks \
+        --export-mp4 /app/preview_tracks.mp4 \
+        --fps "${FPS_MP4}" --crf -1 \
+        --draw-court --draw-court-lines --roi-json /app/court.json || true
+  fi
+  set -e
+
   [ -f "$PREVIEW_MP4" ] && fix_permissions "$PREVIEW_MP4"
-  [ -d "$PREVIEW_DIR" ] && chmod -R a+r "$PREVIEW_DIR" 2>/dev/null || true
-  ls -lh "$PREVIEW_MP4" 2>/dev/null || echo "[INFO] MP4 не створено (перевірте логи)"
-  # покажемо доступні режими — корисно для перевірки README/параметрів
+  ls -lh "$PREVIEW_MP4" 2>/dev/null || echo "[INFO] MP4 не створено (перевірте логи або PNG-и у ${PREVIEW_DIR})"
+  # Підказка щодо режимів
   overlay_modes_hint
 }
 
