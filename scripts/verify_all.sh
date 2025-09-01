@@ -32,6 +32,8 @@ DETECTIONS_JSON="${OUT_DIR}/detections.json"
 TRACKS_JSON="${OUT_DIR}/tracks.json"
 PREVIEW_DIR="${OUT_DIR}/preview_tracks"
 PREVIEW_MP4="${OUT_DIR}/preview_tracks.mp4"
+PREVIEW_DET_DIR="${OUT_DIR}/preview_detect"
+PREVIEW_DET_MP4="${OUT_DIR}/preview_detect.mp4"
 
 # ROI-only previews
 PREVIEW_COURT_DIR="${OUT_DIR}/preview_court"
@@ -180,6 +182,65 @@ print("[summary] classes:", dict(ctr))
 PY
 }
 
+run_detect_overlay() {
+  echo "[STEP] Detection overlay (PNGs) -> ${PREVIEW_DET_DIR}"
+  rm -rf "$PREVIEW_DET_DIR" "$PREVIEW_DET_MP4"
+
+  docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+    decoder-track:latest \
+      -m src.draw_overlay \
+      --mode detect \
+      --frames-dir /app/frames \
+      --detections-json /app/detections.json \
+      --output-dir /app/preview_detect \
+      --draw-court --draw-court-lines --roi-json /app/court.json
+
+  [ -d "$PREVIEW_DET_DIR" ] && chmod -R a+r "$PREVIEW_DET_DIR" 2>/dev/null || true
+
+  echo "[STEP] Detection overlay (MP4) -> ${PREVIEW_DET_MP4}"
+  set +e
+  docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+    decoder-track:latest \
+      -m src.draw_overlay \
+      --mode detect \
+      --frames-dir /app/frames \
+      --detections-json /app/detections.json \
+      --output-dir /app/preview_detect \
+      --export-mp4 /app/preview_detect.mp4 \
+      --fps "${FPS_MP4}" --crf "${CRF}" \
+      --draw-court --draw-court-lines --roi-json /app/court.json
+  rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "[WARN] ffmpeg CRF може бути недоступний — повторюємо з --crf -1"
+    docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+      decoder-track:latest \
+        -m src.draw_overlay \
+        --mode detect \
+        --frames-dir /app/frames \
+        --detections-json /app/detections.json \
+        --output-dir /app/preview_detect \
+        --export-mp4 /app/preview_detect.mp4 \
+        --fps "${FPS_MP4}" --crf -1 \
+        --draw-court --draw-court-lines --roi-json /app/court.json || true
+  fi
+  set -e
+
+  [ -f "$PREVIEW_DET_MP4" ] && fix_permissions "$PREVIEW_DET_MP4"
+  ls -lh "$PREVIEW_DET_MP4" 2>/dev/null || echo "[INFO] MP4(detect) не створено — див. PNG у ${PREVIEW_DET_DIR}"
+
+  # --- Fallback: якщо внутрішній експорт не дав MP4, пробуємо ffmpeg з контейнера ---
+  if [ ! -f "$PREVIEW_DET_MP4" ]; then
+    echo "[FALLBACK] building detect MP4 via ffmpeg (mpeg4, qscale=2)"
+    docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint ffmpeg decoder-track:latest \
+      -hide_banner -loglevel warning -nostdin -y \
+      -framerate ${FPS_MP4} -pattern_type glob -i '/app/preview_detect/_mp4_stage/*.png' \
+      -f mp4 -c:v mpeg4 -qscale:v 2 -pix_fmt yuv420p -movflags +faststart \
+      /app/preview_detect.mp4 || true
+    [ -f "$PREVIEW_DET_MP4" ] && fix_permissions "$PREVIEW_DET_MP4"
+    ls -lh "$PREVIEW_DET_MP4" 2>/dev/null || echo "[INFO] MP4(detect) fallback теж не створився"
+  fi
+}
+
 run_track() {
   echo "[STEP] Tracking -> ${TRACKS_JSON}"
   rm -f "$TRACKS_JSON"
@@ -267,6 +328,18 @@ run_overlay() {
   ls -lh "$PREVIEW_MP4" 2>/dev/null || echo "[INFO] MP4 не створено (перевірте логи або PNG-и у ${PREVIEW_DIR})"
   # Підказка щодо режимів
   overlay_modes_hint
+
+  # --- Fallback для track MP4 ---
+  if [ ! -f "$PREVIEW_MP4" ]; then
+    echo "[FALLBACK] building track MP4 via ffmpeg (mpeg4, qscale=2)"
+    docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint ffmpeg decoder-track:latest \
+      -hide_banner -loglevel warning -nostdin -y \
+      -framerate ${FPS_MP4} -pattern_type glob -i '/app/preview_tracks/_mp4_stage/*.png' \
+      -f mp4 -c:v mpeg4 -qscale:v 2 -pix_fmt yuv420p -movflags +faststart \
+      /app/preview_tracks.mp4 || true
+    [ -f "$PREVIEW_MP4" ] && fix_permissions "$PREVIEW_MP4"
+    ls -lh "$PREVIEW_MP4" 2>/dev/null || echo "[INFO] MP4(track) fallback теж не створився"
+  fi
 }
 
 # ---- КРОК 6: ROI-only overlay (кадри + MP4) ----------------------------------
@@ -303,7 +376,8 @@ maybe_extract_frames
 run_court
 run_court_map
 run_detect
-run_track
-run_overlay
+run_detect_overlay
+run_track || true
+run_overlay || true
 run_roi_overlay
 echo "[OK] Пайплайн завершено"
