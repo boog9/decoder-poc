@@ -236,6 +236,12 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
 The legacy `src.draw_tracks` module is kept for backwards compatibility and
 forwards all arguments to `src.draw_overlay --mode track`.
 
+> Щоб побачити доступні режими `--mode`, виконайте:
+```bash
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay --help | grep -E -- '--mode.*\{.*\}'
+```
+
 ### Court diagnostics
 
 After running `decoder-court`, basic homography quality stats can be obtained
@@ -544,6 +550,18 @@ docker run --gpus all --rm -v "$(pwd)":/app \
 * ``--detections-json`` – input file produced by the detection step.
 * ``--output-json`` – destination for the tracked results.
 * ``--min-score`` – detection score threshold (default: ``0.3``).
+
+> У різних білдах `decoder-track` точка входу може відрізнятися.
+> Якщо модуль `src.track` відсутній, використовуйте або інший модуль (`src.track_objects`, `src.tracker`, …), або CLI `track`.
+
+```bash
+# Автовибір точки входу робить скрипт:
+bash scripts/verify_all.sh
+
+# Ручний приклад (модуль):
+docker run --gpus all --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.track_objects --detections-json /app/detections.json --output-json /app/tracks.json --fps 30 --min-score 0.10
+```
 
 Note: We avoid accessing private STrack fields and support different ByteTrack
 forks that expose `tlwh` as a property or method, and sometimes only provide
