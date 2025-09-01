@@ -981,8 +981,10 @@ def _ffmpeg_try(cmd: List[str]) -> Tuple[int, str, str]:
 def _encode_mp4(stage_dir: Path, out_path: Path, fps: int, crf_val: int) -> None:
     """Encode ``stage_dir`` PNG frames into ``out_path``.
 
-    The function attempts ``libx264`` first and progressively falls back to
-    alternative rate-control modes and codecs.
+    Ensures explicit ``-f mp4`` and uses a ``.tmp.mp4`` temporary file so that
+    container detection does not depend on the filename extension. The function
+    attempts ``libx264`` first and progressively falls back to alternative
+    rate-control modes and codecs.
     """
 
     pngs = glob.glob(os.path.join(stage_dir, "*.png"))
@@ -1005,16 +1007,28 @@ def _encode_mp4(stage_dir: Path, out_path: Path, fps: int, crf_val: int) -> None
     ]
 
     def run(codec: str, rc_args: List[str]) -> bool | str:
-        tmp_out = str(out_path) + ".tmp"
+        tmp_out = out_path.with_suffix(".tmp.mp4")
         cmd = (
             base
             + ["-c:v", codec]
             + rc_args
-            + ["-pix_fmt", "yuv420p", "-movflags", "+faststart", tmp_out]
+            + [
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                "-f",
+                "mp4",
+                str(tmp_out),
+            ]
         )
         print("[INFO] Running:", " ".join(shlex.quote(x) for x in cmd))
         code, _stdout, stderr = _ffmpeg_try(cmd)
         if code == 0:
+            try:
+                os.chmod(tmp_out, 0o664)
+            except OSError:
+                pass
             try:
                 os.replace(tmp_out, out_path)
             except FileNotFoundError:  # pragma: no cover - odd ffmpeg success
