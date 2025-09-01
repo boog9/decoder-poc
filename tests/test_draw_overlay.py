@@ -20,7 +20,6 @@ import types
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
-np.int32 = int
 
 cv2_dummy = types.ModuleType('cv2')
 cv2_dummy.imread = lambda *a, **k: None
@@ -31,6 +30,9 @@ cv2_dummy.polylines = lambda *a, **k: None
 cv2_dummy.FONT_HERSHEY_SIMPLEX = 0
 cv2_dummy.LINE_AA = 16
 sys.modules.setdefault('cv2', cv2_dummy)
+
+# Import canonical court model for tests
+from services.court_detector.court_reference_tcd import CANONICAL_LINES
 
 # Stub for shapely.geometry to avoid heavy dependency
 class DummyPolygon:
@@ -192,7 +194,6 @@ def test_track_color_consistent_over_frames(tmp_path: Path, monkeypatch: pytest.
         True,
         None,
         None,
-        None,
         False,
         {},
     )
@@ -206,7 +207,15 @@ def test_draw_overlay_renders_court_polygon(tmp_path: Path, monkeypatch: pytest.
     frames = tmp_path / "frames"
     frames.mkdir()
     (frames / "frame_000001.png").write_bytes(b"0")
-    frame_map = {"frame_000001.png": [{"class": 100, "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}]}
+    frame_map = {
+        "frame_000001.png": [
+            {
+                "class": 100,
+                "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+                "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            }
+        ]
+    }
 
     class DummyCV2:
         def __init__(self) -> None:
@@ -221,10 +230,25 @@ def test_draw_overlay_renders_court_polygon(tmp_path: Path, monkeypatch: pytest.
         def polylines(self, img, pts, is_closed, color, thickness):
             self.poly_count += 1
 
+        def line(self, *a, **k):
+            pass
+
         def rectangle(self, *a, **k):
             pass
 
         def putText(self, *a, **k):
+            pass
+
+        def getPerspectiveTransform(self, src, dst):  # type: ignore[override]
+            return np.eye(3, dtype=float)
+
+        def perspectiveTransform(self, pts, h):  # type: ignore[override]
+            return pts
+
+        def fillPoly(self, *a, **k):  # type: ignore[override]
+            pass
+
+        def addWeighted(self, *a, **k):  # type: ignore[override]
             pass
 
         FONT_HERSHEY_SIMPLEX = 0
@@ -254,7 +278,6 @@ def test_draw_overlay_renders_court_polygon(tmp_path: Path, monkeypatch: pytest.
         True,
         None,
         None,
-        None,
         False,
         {},
     )
@@ -272,6 +295,7 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
                 "class": 100,
                 "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
                 "lines": {"service_center": [[0, 0], [1, 1]]},
+                "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
             }
         ]
     }
@@ -296,7 +320,7 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
         def polylines(self, img, pts, is_closed, color, thickness):
             self.polylines_calls.append(thickness)
 
-        def line(self, img, pt1, pt2, color, thickness):
+        def line(self, img, pt1, pt2, color, thickness, *a, **k):
             self.line_calls.append(thickness)
 
         def rectangle(self, *a, **k):
@@ -344,7 +368,6 @@ def test_draw_overlay_renders_court_lines(tmp_path: Path, monkeypatch: pytest.Mo
         True,
         None,
         None,
-        None,
         False,
         {},
     )
@@ -360,6 +383,7 @@ def test_draw_overlay_skips_court_polygon_when_disabled(
     frames.mkdir()
     (frames / "frame_000001.png").write_bytes(b"0")
     frame_map = {"frame_000001.png": [{"class": 100, "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}]}
+    frame_map["frame_000001.png"][0]["homography"] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 
     class DummyCV2:
         def __init__(self) -> None:
@@ -374,10 +398,25 @@ def test_draw_overlay_skips_court_polygon_when_disabled(
         def polylines(self, img, pts, is_closed, color, thickness):
             self.poly_count += 1
 
+        def line(self, *a, **k):
+            pass
+
         def rectangle(self, *a, **k):
             pass
 
         def putText(self, *a, **k):
+            pass
+
+        def getPerspectiveTransform(self, src, dst):  # type: ignore[override]
+            return np.eye(3, dtype=float)
+
+        def perspectiveTransform(self, pts, h):  # type: ignore[override]
+            return pts
+
+        def fillPoly(self, *a, **k):  # type: ignore[override]
+            pass
+
+        def addWeighted(self, *a, **k):  # type: ignore[override]
             pass
 
         FONT_HERSHEY_SIMPLEX = 0
@@ -407,7 +446,6 @@ def test_draw_overlay_skips_court_polygon_when_disabled(
         "class",
         False,
         True,
-        None,
         None,
         None,
         False,
@@ -514,7 +552,6 @@ def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytes
         True,
         False,
         None,
-        None,
         roi_map,
         False,
         {},
@@ -527,12 +564,16 @@ def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytes
 def test_compute_court_lines_identity() -> None:
     import importlib
     import sys
+
     sys.modules.pop("numpy", None)
     real_np = importlib.import_module("numpy")
     dov.np = real_np  # type: ignore[attr-defined]
+    sys.modules.pop("cv2", None)
+    import cv2 as real_cv2
+    dov.cv2 = real_cv2  # type: ignore[attr-defined]
     lines = dov._compute_court_lines([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    assert "service_center" in lines
-    assert lines["baseline_south"][0] == [0.0, 0.0]
+    assert "line_0" in lines
+    assert lines["line_0"][0] == list(CANONICAL_LINES[0][0])
 
 
 def test_draw_overlay_detect_mode_writes_score(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -585,7 +626,6 @@ def test_draw_overlay_detect_mode_writes_score(tmp_path: Path, monkeypatch: pyte
         False,
         None,
         None,
-        None,
         False,
         {},
         False,
@@ -625,6 +665,12 @@ def test_draw_overlay_placeholder_star(tmp_path: Path, monkeypatch: pytest.Monke
         def putText(self, img, text, org, font, fs, color, th, lt):
             texts.append(text)
 
+        def line(self, *a, **k):
+            pass
+
+        def perspectiveTransform(self, pts, H):  # type: ignore[override]
+            return pts
+
         FONT_HERSHEY_SIMPLEX = 0
         LINE_AA = 16
         IMREAD_COLOR = 1
@@ -649,7 +695,6 @@ def test_draw_overlay_placeholder_star(tmp_path: Path, monkeypatch: pytest.Monke
         "class",
         True,
         False,
-        None,
         None,
         roi_map,
         False,

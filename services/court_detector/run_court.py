@@ -16,6 +16,7 @@ import cv2, numpy as np, torch
 from .tcd_model import BallTrackerNet
 from .utils_weights import load_tcd_state_dict
 from .postproc import heat_to_peak_xy, refine_kps_if_needed
+from .homography_tcd import HomographyEMA
 
 def _order_quad_tl_tr_br_bl(box: np.ndarray) -> np.ndarray:
     box = np.asarray(box, dtype=np.float32)
@@ -64,15 +65,28 @@ def process_frames(frames_dir: str, weights_path: str, out_json: str,
         raise SystemExit(2)
 
     out = []; all_kps: List[dict] = []
+    h_ema = HomographyEMA()
     for i, fp in enumerate(frames):
         if (i % sample_rate) != 0:
-            out.append({"frame": os.path.basename(fp), "polygon": [], "lines": {},
-                        "homography": [[1,0,0],[0,1,0],[0,0,1]], "score": 0.0, "placeholder": True})
+            out.append({
+                "frame": os.path.basename(fp),
+                "polygon": [],
+                "lines": {},
+                "homography": [],
+                "score": 0.0,
+                "placeholder": True,
+            })
             continue
         img = cv2.imread(fp, cv2.IMREAD_COLOR)
         if img is None:
-            out.append({"frame": os.path.basename(fp), "polygon": [], "lines": {},
-                        "homography": [[1,0,0],[0,1,0],[0,0,1]], "score": 0.0, "placeholder": True})
+            out.append({
+                "frame": os.path.basename(fp),
+                "polygon": [],
+                "lines": {},
+                "homography": [],
+                "score": 0.0,
+                "placeholder": True,
+            })
             continue
         H0, W0 = img.shape[:2]
         x = preprocess_bgr(img, dev)
@@ -108,13 +122,18 @@ def process_frames(frames_dir: str, weights_path: str, out_json: str,
             box = _order_quad_tl_tr_br_bl(box)
             poly = [[int(p[0]), int(p[1])] for p in box]
             score = float(valid.shape[0]) / 14.0
-            out.append({"frame": os.path.basename(fp), "polygon": poly, "lines": {},
-                        "homography": [[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
-                        "score": score, "placeholder": False})
+            rec = h_ema.update(poly)
+            rec.update({"frame": os.path.basename(fp), "lines": {}, "score": score})
+            out.append(rec)
         else:
-            out.append({"frame": os.path.basename(fp), "polygon": [], "lines": {},
-                        "homography": [[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
-                        "score": 0.0, "placeholder": True})
+            out.append({
+                "frame": os.path.basename(fp),
+                "polygon": [],
+                "lines": {},
+                "homography": [],
+                "score": 0.0,
+                "placeholder": True,
+            })
         all_kps.append({
             "frame": os.path.basename(fp),
             "kps_native": points_native,
@@ -134,7 +153,7 @@ def process_frames(frames_dir: str, weights_path: str, out_json: str,
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--frames-dir", required=True, help="Directory with input frames")
-    p.add_argument("--output-json", help="Path for output JSON")
+    p.add_argument("--output-json", default="/app/court.json", help="Path for output JSON")
     p.add_argument("--out-json", dest="output_json", help=argparse.SUPPRESS)
     p.add_argument("--weights", default="/app/weights/tcd.pth", help="Path to TCD weights")
     p.add_argument("--device", default="cpu", help="Execution device: cpu or cuda")
@@ -151,8 +170,6 @@ def build_argparser() -> argparse.ArgumentParser:
 def main(args: List[str] | None = None) -> None:
     parser = build_argparser()
     ns = parser.parse_args(args)
-    if not ns.output_json:
-        parser.error("--output-json (or --out-json) is required")
     if ns.kp_json_path:
         os.environ["KP_JSON_PATH"] = ns.kp_json_path
     process_frames(frames_dir=ns.frames_dir, weights_path=ns.weights, out_json=ns.output_json,

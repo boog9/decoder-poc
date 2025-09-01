@@ -202,13 +202,24 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
   --mode detect --draw-court-lines --roi-json /app/court.json
 ```
 
+```bash
+# preview court geometry only
+docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
+  -m src.draw_overlay \
+  --mode roi --frames-dir /app/frames \
+  --roi-json /app/court.json --output-dir /app/preview_onlycourt \
+  --draw-court --draw-court-lines
+
+```
+
 Use `--draw-court=false` to hide the court polygon and
 `--no-draw-court-lines` to omit internal lines.
 
-`--roi-json` accepts either a single polygon `{ "polygon": [...] }` or a `court.json` file with per-frame entries. Entries can be keyed by numeric `frame` index (e.g. `"frame": 123` → matches `frame_000123.(png|jpg|jpeg)`) or by explicit filename (e.g. `"file": "frame_000123.png"`). If a homography is provided but the file lacks internal `lines`, standard ITF court lines are generated automatically. Frames with `"placeholder": true` are marked with a star.
+`--roi-json` accepts either a single polygon `{ "polygon": [...] }` or a `court.json` file with per-frame entries. Entries can be keyed by numeric `frame` index (e.g. `"frame": 123` → matches `frame_000123.(png|jpg|jpeg)`) or by explicit filename (e.g. `"file": "frame_000123.png"`). When a homography is available and the file lacks internal `lines`, standard ITF court lines from `CANONICAL_LINES` are drawn automatically. If no homography is present but `lines` are provided, they are assumed to be in pixel coordinates and rendered as-is. Frames with `"placeholder": true` are marked with a star.
 
 - `--only-court`: Draw only the court contour without boxes or IDs.
 - `--draw-court-axes`: Render tiny coordinate axes when a homography is available.
+- `--diag-grid`: Draw a 10×10 diagnostic grid instead of official court lines.
 - `--palette-seed`: Stabilise the colour palette globally.
 - `--class-map`: Optional JSON/YAML mapping of class IDs to names.
 - `--confidence-thr`: Filter detections below this score.
@@ -224,6 +235,18 @@ docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
 
 The legacy `src.draw_tracks` module is kept for backwards compatibility and
 forwards all arguments to `src.draw_overlay --mode track`.
+
+### Court diagnostics
+
+After running `decoder-court`, basic homography quality stats can be obtained
+via:
+
+```bash
+python tools/diag_court.py --court court.json
+```
+
+This prints RMSE and determinant summaries and writes the top 25 worst frames to
+`H_CHECK_TOP.txt`.
 
 
 Before running the enhancement script, install the Python dependencies. Ensure
@@ -247,7 +270,7 @@ End-to-end приклад з тюнінгами під теніс (Docker-first)
 # 1) court detection -> /app/court.json
 docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames --output-json /app/court.json \
-  --weights /app/weights/tcd.pth --sample-rate 5 --stabilize ema
+  --weights /app/weights/tcd.pth --sample-rate 5
 
 # 2) detect – class-aware NMS, ROI gate, ball interpolation up to 5 frames
 docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
@@ -984,7 +1007,7 @@ docker run --rm -v "$(pwd)":/app decoder-court:latest \
   --frames-dir /app/frames --out-json /app/court.json \
   --device cpu --weights /app/weights/tcd.pth \
   --stride 5
-# (also works with --output-json, --sample-rate, --stabilize (no-op))
+# (also works with --output-json and --sample-rate)
 
 # 2) detect
 docker run --gpus all --rm -v "$(pwd)":/app decoder-detect:latest \
