@@ -44,25 +44,27 @@ def track(detections_json: Path, output_json: Path, fps: int, min_score: float) 
     """Assign track IDs using ByteTrack or a simple fallback."""
     data = _load_detections(detections_json)
     id_gen = _fake_track_id()
-    tracker = BYTETracker(fps=fps) if BYTETracker else None
+    tracker = BYTETracker(frame_rate=fps) if BYTETracker else None
     results: List[Dict] = []
     for frame in data:
         tracks = []
         if tracker:
-            dets = []
+            tlwhs, scores, classes = [], [], []
             for det in frame.get("detections", []):
                 if det.get("score", 0.0) >= min_score:
                     x1, y1, x2, y2 = det["bbox"]
-                    dets.append((x1, y1, x2 - x1, y2 - y1, det["score"], det["class"]))
-            outputs = tracker.update(dets)
+                    tlwhs.append((x1, y1, x2 - x1, y2 - y1))
+                    scores.append(det["score"])
+                    classes.append(det.get("class"))
+            outputs = tracker.update(tlwhs, scores, classes, frame["frame"])
             for trk in outputs:
-                x1, y1, w, h, tid, cls, score = trk
+                x1, y1, w, h = trk.tlwh
                 tracks.append(
                     {
-                        "id": int(tid),
+                        "id": int(trk.track_id),
                         "bbox": [float(x1), float(y1), float(x1 + w), float(y1 + h)],
-                        "class": int(cls),
-                        "score": float(score),
+                        "class": int(trk.cls) if trk.cls is not None else None,
+                        "score": float(trk.score),
                     }
                 )
         else:
