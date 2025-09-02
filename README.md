@@ -29,7 +29,24 @@ This repository provides Dockerized utilities for frame extraction, object detec
   docker run --rm -v "$(pwd)":/app --entrypoint python decoder-track:latest \
     -m src.draw_overlay --mode track --frames-dir /app/frames \
     --tracks-json /app/tracks.json --output-dir /app/preview_tracks \
-    --export-mp4 /app/preview_tracks.mp4 --fps 30 --crf 18 --id --label
+    --export-mp4 /app/preview_tracks.mp4 --fps 30 --crf 18 --id --label \
+    --roi-json /app/roi.json
+  ```
+
+  The optional `roi.json` describes polygons to overlay for visualization only. Example:
+
+  ```json
+  {
+    "polygons": [
+      {
+        "name": "ROI-1",
+        "points": [[120,80],[1280,80],[1280,640],[120,640]],
+        "color": "#00FF00",
+        "thickness": 2,
+        "fill_alpha": 0.12
+      }
+    ]
+  }
   ```
 
 ## Development
