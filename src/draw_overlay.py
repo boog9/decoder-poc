@@ -317,10 +317,13 @@ def _ensure_H(rec: Dict[str, Any]) -> Optional[np.ndarray]:
         return np.asarray(H, dtype=float)
     quad = normalize_quad(rec.get("polygon"))
     if quad is not None:
+        # IMPORTANT: bring polygon to canonical TL, TR, BR, BL order
+        dst = _order_poly(quad)
         src = np.float32([[0, 0], [1, 0], [1, 1], [0, 1]])
-        dst = np.float32(quad)
         Hm = cv2.getPerspectiveTransform(src, dst)
-        LOGGER.debug("[ROI] homography: computed from quad")
+        LOGGER.debug(
+            "[ROI] homography: computed from quad (ordered TL,TR,BR,BL)"
+        )
         return Hm
     return None
 
