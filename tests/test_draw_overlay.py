@@ -863,3 +863,44 @@ def test_flexible_bool_parsing(tmp_path: Path) -> None:
     assert defaults.draw_court_lines is True
     assert defaults.draw_court_axes is False
     assert defaults.only_court is False
+
+
+def test_ensure_H_orders_quad(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_ensure_H should be insensitive to vertex order."""
+
+    def order_poly_py(poly: list[list[float]]) -> list[list[float]]:
+        pts = [tuple(map(float, p)) for p in poly]
+        sums = [x + y for x, y in pts]
+        diffs = [x - y for x, y in pts]
+        tl = sums.index(min(sums))
+        br = sums.index(max(sums))
+        tr = diffs.index(min(diffs))
+        bl = diffs.index(max(diffs))
+        return [list(pts[i]) for i in (tl, tr, br, bl)]
+
+    def fake_get_perspective_transform(src, dst):
+        return dst
+
+    def fake_perspective_transform(pts, H):
+        return H
+
+    monkeypatch.setattr(dov, "_order_poly", order_poly_py, raising=False)
+    monkeypatch.setattr(dov.np, "float32", lambda x: x, raising=False)
+    monkeypatch.setattr(
+        dov.cv2, "getPerspectiveTransform", fake_get_perspective_transform, raising=False
+    )
+    monkeypatch.setattr(
+        dov.cv2, "perspectiveTransform", fake_perspective_transform, raising=False
+    )
+
+    quad_tl = [[10, 10], [110, 10], [110, 60], [10, 60]]  # TL, TR, BR, BL
+    quad_mix = [[110, 60], [10, 60], [10, 10], [110, 10]]  # BR, BL, TL, TR
+
+    H1 = dov._ensure_H({"polygon": quad_tl})
+    H2 = dov._ensure_H({"polygon": quad_mix})
+    assert H1 is not None and H2 is not None
+
+    src_pts = [[0, 0], [1, 0], [1, 1], [0, 1]]
+    p1 = dov.cv2.perspectiveTransform(src_pts, H1)
+    p2 = dov.cv2.perspectiveTransform(src_pts, H2)
+    assert p1 == p2
