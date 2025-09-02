@@ -277,11 +277,24 @@ PY
   esac
   fix_permissions "$TRACKS_JSON"
   summary_json "$TRACKS_JSON"
+  export _TRACK_RAN=1
+}
+
+# Чи є треки?
+have_tracks_json() {
+  [ -s "$TRACKS_JSON" ] && return 0
+  return 1
 }
 
 run_overlay() {
   echo "[STEP] Tracks overlay (PNGs) -> ${PREVIEW_DIR}"
   rm -rf "$PREVIEW_DIR" "$PREVIEW_MP4"
+
+  # Якщо немає tracks.json — пропускаємо
+  if ! have_tracks_json; then
+    echo "[SKIP] tracks.json не знайдено — пропускаю track overlay"
+    return 0
+  fi
 
   # 1) Рендер PNG-кадрів (track overlay)
   docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
@@ -330,6 +343,9 @@ run_overlay() {
   overlay_modes_hint
 
   # --- Fallback для track MP4 ---
+  # Якщо PNG не згенерились — не намагаємось збирати MP4
+  [ -d "$PREVIEW_DIR/_mp4_stage" ] || return 0
+
   if [ ! -f "$PREVIEW_MP4" ]; then
     echo "[FALLBACK] building track MP4 via ffmpeg (mpeg4, qscale=2)"
     docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint ffmpeg decoder-track:latest \
@@ -347,26 +363,34 @@ run_roi_overlay() {
   echo "[STEP] ROI overlay -> ${PREVIEW_COURT_DIR} + ${PREVIEW_COURT_MP4}"
   rm -rf "$PREVIEW_COURT_DIR" "$PREVIEW_COURT_MP4"
 
-  # лише контур майданчика, лінії та ROI; без треків/детекцій
+  # Спершу пробуємо мапу кадрів за іменами (найстабільніше)
   docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
     decoder-track:latest \
       -m src.draw_overlay \
+      --mode roi \
       --frames-dir /app/frames \
       --output-dir /app/preview_court \
-      --only-court \
-      --draw-court-lines \
-      --roi-json /app/court.json \
-      --export-mp4 /app/preview_court.mp4 \
-      --fps ${FPS} --crf 18
+      --draw-court --draw-court-lines \
+      --roi-json /app/court_by_name.json \
+      --export-mp4 /app/preview_court.mp4 --fps ${FPS_MP4} --crf 18 || true
 
-  # права доступу
+  # Якщо PNG так і не з’явилися — пробуємо сирий court.json
+  if [ ! -d "$PREVIEW_COURT_DIR" ] || [ -z "$(ls -A "$PREVIEW_COURT_DIR" 2>/dev/null)" ]; then
+    echo "[FALLBACK] ROI overlay: retrying with /app/court.json"
+    rm -rf "$PREVIEW_COURT_DIR" "$PREVIEW_COURT_MP4"
+    docker run --rm $DOCKER_USER -v "$(pwd)":/app --entrypoint python \
+      decoder-track:latest \
+        -m src.draw_overlay \
+        --mode roi \
+        --frames-dir /app/frames \
+        --output-dir /app/preview_court \
+        --draw-court --draw-court-lines \
+        --roi-json /app/court.json \
+        --export-mp4 /app/preview_court.mp4 --fps ${FPS_MP4} --crf 18 || true
+  fi
   if [ -f "$PREVIEW_COURT_MP4" ]; then fix_permissions "$PREVIEW_COURT_MP4"; fi
   if [ -d "$PREVIEW_COURT_DIR" ]; then chmod -R a+r "$PREVIEW_COURT_DIR" 2>/dev/null || true; fi
-
-  # коротке зведення
-  if [ -f "$PREVIEW_COURT_MP4" ]; then
-    echo "[summary] ROI mp4:"; ls -lh "$PREVIEW_COURT_MP4"
-  fi
+  [ -f "$PREVIEW_COURT_MP4" ] && ls -lh "$PREVIEW_COURT_MP4"
 }
 
 # --------------------------------- MAIN ---------------------------------------
@@ -376,8 +400,15 @@ maybe_extract_frames
 run_court
 run_court_map
 run_detect
+_TRACK_RAN=0
+# 1) завжди detect overlay (QA)
 run_detect_overlay
-run_track || true
-run_overlay || true
+# 2) якщо доступний трекер та є tracks.json — робимо track overlay
+if run_track && have_tracks_json; then
+  run_overlay
+else
+  echo "[WARN] Tracking failed/absent — пропускаю track overlay"
+fi
+# 3) завжди малюємо ROI-контури
 run_roi_overlay
 echo "[OK] Пайплайн завершено"
