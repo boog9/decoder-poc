@@ -1,5 +1,0 @@
-Pillow
-loguru>=0.7.0
-numpy
-opencv-python-headless
-shapely

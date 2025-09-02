@@ -1,4 +1,4 @@
-.PHONY: build test enhance lint-imports draw draw-run-detect draw-run-track draw-run-mp4 court court-run
+.PHONY: build test enhance lint-imports draw draw-run-detect draw-run-track draw-run-mp4
 
 build:
 	DOCKER_BUILDKIT=1 docker build -t decoder-poc .
@@ -38,9 +38,3 @@ draw-run-mp4:
 	  --output-dir /app/out/frames_viz \
 	  --label --id --export-mp4 /app/out/tracks_viz.mp4 --fps 25 --crf 23
 
-court:
-	DOCKER_BUILDKIT=1 docker build -f services/court_detector/Dockerfile.court -t decoder-court:latest .
-
-court-run:
-	docker run --rm -v $(CURDIR):/app decoder-court:latest \
-	  --frames-dir /app/data/frames_min --output-json /app/court.json
