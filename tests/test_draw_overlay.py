@@ -516,9 +516,10 @@ def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytes
     frames.mkdir()
     (frames / "frame_000001.png").write_bytes(b"0")
     frame_map: dict[str, list[dict]] = {"frame_000001.png": []}
-    roi_map = {
+    roi_raw = {
         "1": {
             "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+            "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
         }
     }
 
@@ -560,7 +561,7 @@ def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytes
         True,
         False,
         None,
-        roi_map,
+        roi_raw,
         False,
         {},
         False,
@@ -569,16 +570,140 @@ def test_draw_overlay_uses_roi_by_frame_index(tmp_path: Path, monkeypatch: pytes
     assert dummy.poly_count >= 1
 
 
+def test_draw_overlay_roi_fallback_polygon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "frame_000001.png").write_bytes(b"0")
+    (frames / "frame_000002.png").write_bytes(b"0")
+    frame_map: dict[str, list[dict]] = {
+        "frame_000001.png": [],
+        "frame_000002.png": [
+            {"bbox": [10, 10, 20, 20], "class": 0},
+            {"bbox": [150, 150, 160, 160], "class": 0},
+        ],
+    }
+    roi_raw = {
+        "frame_000001.png": {"polygon": [[0, 0], [100, 0], [100, 100], [0, 100]]}
+    }
+
+    roi_poly = Polygon(roi_raw["frame_000001.png"]["polygon"])
+
+    class DummyCV2:
+        def __init__(self) -> None:
+            self.rects: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+        def imread(self, path: str, flag=None):
+            import types
+
+            return types.SimpleNamespace(shape=(200, 200, 3))
+
+        def imwrite(self, path: str, img) -> bool:
+            return True
+
+        def rectangle(self, img, pt1, pt2, color, thickness):
+            self.rects.append((pt1, pt2))
+
+        def pointPolygonTest(self, poly, pt, measureDist):  # type: ignore[override]
+            x, y = pt
+            return 1 if 0 <= x <= 100 and 0 <= y <= 100 else -1
+
+        def polylines(self, *a, **k):
+            pass
+
+        def putText(self, *a, **k):
+            pass
+
+        def line(self, *a, **k):
+            pass
+
+        FONT_HERSHEY_SIMPLEX = 0
+        LINE_AA = 16
+        IMREAD_COLOR = 1
+
+    import src.draw_overlay as dov
+
+    dummy = DummyCV2()
+    monkeypatch.setattr(dov, "cv2", dummy)
+
+    out = tmp_path / "out"
+    res = dov._draw_overlay(
+        frames,
+        frame_map,
+        out,
+        False,
+        False,
+        0.0,
+        set(),
+        set(),
+        1,
+        0.5,
+        0,
+        -1,
+        0,
+        "class",
+        False,
+        False,
+        roi_poly,
+        roi_raw,
+        False,
+        {},
+        False,
+    )
+    assert res == 2
+    assert len(dummy.rects) == 1
+
+
+def test_draw_court_lines_without_polygon(monkeypatch: pytest.MonkeyPatch) -> None:
+    img = np.zeros((10, 10, 3), np.uint8)
+    court_rec = {
+        "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "placeholder": False,
+    }
+
+    class DummyCV2:
+        def __init__(self) -> None:
+            self.lines: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+        def line(self, img, a, b, color, thickness, lt):
+            self.lines.append((tuple(a), tuple(b)))
+
+        def perspectiveTransform(self, pts, H):  # type: ignore[override]
+            return pts
+
+        def polylines(self, *a, **k):
+            pass
+
+        def addWeighted(self, *a, **k):
+            pass
+
+        def fillPoly(self, *a, **k):
+            pass
+
+        LINE_AA = 16
+
+    import src.draw_overlay as dov
+
+    dummy = DummyCV2()
+    monkeypatch.setattr(dov, "cv2", dummy)
+    dov._draw_court(img, court_rec, draw_lines=True, draw_poly=False)
+    assert dummy.lines
+
+
 def test_compute_court_lines_identity() -> None:
     import importlib
     import sys
+    import pytest
 
     sys.modules.pop("numpy", None)
     real_np = importlib.import_module("numpy")
     dov.np = real_np  # type: ignore[attr-defined]
     sys.modules.pop("cv2", None)
-    import cv2 as real_cv2
-    dov.cv2 = real_cv2  # type: ignore[attr-defined]
+    sys.modules.pop("cv2.typing", None)
+    try:
+        cv2 = importlib.import_module("cv2")
+    except Exception:  # pragma: no cover - cv2 import issues
+        pytest.skip("cv2 unavailable")
+    dov.cv2 = cv2  # type: ignore[attr-defined]
     lines = dov._compute_court_lines([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
     assert "line_0" in lines
     assert lines["line_0"][0] == list(CANONICAL_LINES[0][0])
@@ -647,7 +772,7 @@ def test_draw_overlay_placeholder_star(tmp_path: Path, monkeypatch: pytest.Monke
     frames.mkdir()
     (frames / "frame_000001.png").write_bytes(b"0")
     frame_map: dict[str, list[dict]] = {"frame_000001.png": []}
-    roi_map = {
+    roi_raw = {
         "frame_000001.png": {
             "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
             "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
@@ -704,7 +829,7 @@ def test_draw_overlay_placeholder_star(tmp_path: Path, monkeypatch: pytest.Monke
         True,
         False,
         None,
-        roi_map,
+        roi_raw,
         False,
         {},
         False,
