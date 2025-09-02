@@ -158,6 +158,110 @@ def _apply_h(pts: List[List[float]], h: List[List[float]]) -> List[List[float]]:
     return prod[:, :2].tolist()
 
 
+# ---------- ROI helpers ----------
+def _is_3x3(H: Any) -> bool:
+    """Return True if ``H`` looks like a 3x3 matrix."""
+
+    try:
+        arr = np.asarray(H, dtype=float)
+    except Exception:
+        return False
+    return arr.shape == (3, 3) and np.isfinite(arr).all()
+
+
+def _det3x3(H: Any) -> float:
+    """Safely compute determinant of a 3x3 matrix."""
+
+    try:
+        return float(np.linalg.det(np.array(H, np.float64)))
+    except Exception:
+        return 0.0
+
+
+def normalize_quad(poly_raw: Any) -> Optional[List[Tuple[float, float]]]:
+    """Normalize polygon-like object to a 4-point list or return ``None``."""
+
+    # shapely Polygon
+    try:
+        if hasattr(poly_raw, "geom_type") and hasattr(poly_raw, "exterior"):
+            coords = list(poly_raw.exterior.coords)[:4]
+            if len(coords) == 4:
+                return [(float(x), float(y)) for (x, y, *_) in coords]
+    except Exception:
+        pass
+    # geojson-like dict
+    if isinstance(poly_raw, dict) and "coordinates" in poly_raw:
+        try:
+            coords = poly_raw["coordinates"][0][:4]
+            if len(coords) == 4:
+                return [(float(x), float(y)) for (x, y, *_) in coords]
+        except Exception:
+            return None
+    # plain list/tuple
+    if isinstance(poly_raw, (list, tuple)) and len(poly_raw) == 4:
+        try:
+            return [(float(p[0]), float(p[1])) for p in poly_raw]
+        except Exception:
+            return None
+    return None
+
+
+def resolve_roi_record(roi_raw: Any, i: int, fname: str) -> Optional[Dict[str, Any]]:
+    """Resolve ROI record for frame ``i`` / ``fname`` from ``roi_raw``."""
+
+    base = os.path.basename(fname)
+    stem0 = f"frame_{i:06d}"
+    candidates = [
+        i,
+        str(i),
+        base,
+        stem0 + ".png",
+        stem0 + ".jpg",
+        stem0 + ".jpeg",
+    ]
+    if i == 0:
+        stem1 = "frame_000001"
+        candidates += [stem1 + ".png", stem1 + ".jpg", stem1 + ".jpeg"]
+
+    def pick_from_dict(D: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+        for k in candidates:
+            if k in D:
+                return D[k], f"key:{k}"
+        for v in D.values():
+            if isinstance(v, dict):
+                f = v.get("frame")
+                if f and f in (*candidates, base):
+                    return v, f"frame:{f}"
+                if v.get("index") == i or v.get("frame_idx") == i + 1:
+                    return v, "index/frame_idx"
+        return None, "none"
+
+    def pick_from_list(L: List[Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+        if 0 <= i < len(L) and isinstance(L[i], dict):
+            return L[i], "list[i]"
+        for v in L:
+            if not isinstance(v, dict):
+                continue
+            f = v.get("frame")
+            if f and f in (*candidates, base):
+                return v, f"frame:{f}"
+            if v.get("index") == i or v.get("frame_idx") == i + 1:
+                return v, "index/frame_idx"
+        return None, "none"
+
+    rec, how = (
+        pick_from_dict(roi_raw)
+        if isinstance(roi_raw, dict)
+        else pick_from_list(roi_raw)
+        if isinstance(roi_raw, list)
+        else (None, "invalid-roi")
+    )
+    if rec:
+        LOGGER.debug(f"[ROI] matched by {how} for frame={base}")
+    else:
+        LOGGER.warning(f"[ROI] no match for frame={base}")
+    return rec
+
 def _compute_court_lines(h: List[List[float]]) -> Dict[str, List[List[float]]]:
     """Project canonical court lines via homography ``h``.
 
@@ -205,32 +309,20 @@ def _order_poly(poly: Iterable[Iterable[float]]) -> np.ndarray:
 
 
 def _ensure_H(rec: Dict[str, Any]) -> Optional[np.ndarray]:
-    """Return a valid homography matrix for ``rec``.
+    """Return 3x3 homography either from JSON or computed from a quad."""
 
-    Prefers the ``homography`` field but falls back to computing it from a
-    ``polygon`` if necessary. The homography maps canonical court coordinates
-    ``[0,1]``×``[0,1]`` to image pixels.
-    """
-
-    try:
-        H = np.array(rec.get("homography", []), float)
-        ok = (
-            H.shape == (3, 3)
-            and np.isfinite(H).all()
-            and abs(float(np.linalg.det(H))) > 1e-6
-        )
-    except Exception:
-        return None
-    if not ok and len(rec.get("polygon", [])) == 4:
-        P = _order_poly(rec["polygon"])
-        ref = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], np.float32)
-        H = cv2.getPerspectiveTransform(ref, P)
-        ok = (
-            H.shape == (3, 3)
-            and np.isfinite(H).all()
-            and abs(float(np.linalg.det(H))) > 1e-6
-        )
-    return H if ok else None
+    H = rec.get("homography")
+    if _is_3x3(H) and abs(_det3x3(H)) > 1e-9:
+        LOGGER.debug("[ROI] homography: 3x3 from JSON")
+        return np.asarray(H, dtype=float)
+    quad = normalize_quad(rec.get("polygon"))
+    if quad is not None:
+        src = np.float32([[0, 0], [1, 0], [1, 1], [0, 1]])
+        dst = np.float32(quad)
+        Hm = cv2.getPerspectiveTransform(src, dst)
+        LOGGER.debug("[ROI] homography: computed from quad")
+        return Hm
+    return None
 
 
 def _draw_canonical_lines(
@@ -647,16 +739,25 @@ def _draw_court(
         diag_grid: If ``True`` draw diagnostic grid instead of court lines.
     """
 
-    poly = court_rec.get("polygon") or []
-    pts_src = list(poly.exterior.coords) if hasattr(poly, "exterior") else list(poly)
-    if len(pts_src) < 4:
-        return
-    try:
-        pts_draw = np.asarray(pts_src, dtype=np.int32).reshape(-1, 1, 2)
-    except Exception:
-        pts_draw = pts_src  # type: ignore[assignment]
+    H = _ensure_H(court_rec)
+    if court_rec.get("placeholder", False):
+        if H is None:
+            return
+        LOGGER.debug("[ROI] placeholder overridden by valid homography")
 
-    if draw_poly:
+    poly = court_rec.get("polygon") or []
+    has_poly = False
+    pts_draw = None
+    if poly:
+        pts_src = list(poly.exterior.coords) if hasattr(poly, "exterior") else list(poly)
+        has_poly = len(pts_src) >= 4
+        if has_poly:
+            try:
+                pts_draw = np.asarray(pts_src, dtype=np.int32).reshape(-1, 1, 2)
+            except Exception:
+                pts_draw = None
+
+    if draw_poly and has_poly and pts_draw is not None:
         overlay = img.copy() if hasattr(img, "copy") else img
         try:
             if hasattr(cv2, "fillPoly"):
@@ -671,7 +772,6 @@ def _draw_court(
 
     if not draw_lines:
         return
-    H = _ensure_H(court_rec)
     lines = court_rec.get("lines") if isinstance(court_rec, dict) else None
     if H is not None:
         if diag_grid:
@@ -704,7 +804,7 @@ def _draw_overlay(
     draw_court: bool,
     draw_court_lines: bool,
     roi_poly: Polygon | None,
-    roi_map: Dict[str, Dict[str, Any]] | None,
+    roi_raw: Any | None,
     only_court: bool,
     primary_map: Dict[int, int],
     draw_court_axes: bool = False,
@@ -748,19 +848,17 @@ def _draw_overlay(
             LOGGER.warning("Failed to read %s", path)
             continue
         h, w = img.shape[:2]
-        frame_roi = _get_frame_roi(idx, path, roi_map)
+        frame_roi = (resolve_roi_record(roi_raw, idx, path.name) if roi_raw else None)
         frame_poly = roi_poly
         placeholder = False
-        homography = None
         if frame_roi:
             if frame_roi.get("polygon"):
                 frame_poly = Polygon(frame_roi["polygon"])  # type: ignore[arg-type]
-            homography = frame_roi.get("homography")
             placeholder = bool(frame_roi.get("placeholder"))
 
         out_path = output_dir / f"{path.stem}.{output_ext}"
 
-        if roi_map and frame_poly is not None:
+        if roi_raw and frame_poly is not None:
             poly_pts = np.array(list(frame_poly.exterior.coords), np.float32)
             filtered: List[dict] = []
             for det in dets:
@@ -773,30 +871,36 @@ def _draw_overlay(
                     filtered.append(det)
             dets = filtered
 
-        if roi_map:
+        if roi_raw:
             dets = [
                 d
                 for d in dets
                 if not (d.get("class") == COURT_CLASS_ID and d.get("polygon"))
             ]
 
-        if (draw_court or draw_court_lines) and frame_poly is not None and not _roi_is_frame(frame_poly):
-            crec = {
-                "polygon": frame_poly,
-                "homography": homography,
-                "lines": frame_roi.get("lines", {}) if frame_roi else {},
-                "placeholder": placeholder,
-            }
-            _draw_court(
-                img,
-                crec,
-                draw_lines=draw_court_lines,
-                draw_poly=draw_court,
-                thickness=thickness,
-                diag_grid=diag_grid,
-            )
-            if draw_court_axes and homography:
-                _draw_axes(img, homography, thickness)
+        if draw_court or draw_court_lines:
+            if frame_poly is not None and _roi_is_frame(frame_poly):
+                pass
+            else:
+                crec = {
+                    "polygon": frame_poly,
+                    "homography": frame_roi.get("homography") if frame_roi else None,
+                    "lines": frame_roi.get("lines", {}) if frame_roi else {},
+                    "placeholder": placeholder,
+                }
+                H_curr = _ensure_H(crec)
+                if H_curr is not None:
+                    crec["homography"] = H_curr.tolist()
+                _draw_court(
+                    img,
+                    crec,
+                    draw_lines=draw_court_lines,
+                    draw_poly=draw_court,
+                    thickness=thickness,
+                    diag_grid=diag_grid,
+                )
+                if draw_court_axes and H_curr is not None:
+                    _draw_axes(img, H_curr, thickness)
 
         if only_court:
             if placeholder:
@@ -1279,10 +1383,18 @@ def main(argv: Iterable[str] | None = None) -> int:
             LOGGER.error("Failed to load class map: %s", exc)
             return 1
 
-    roi_map: Optional[Dict[str, Dict[str, Any]]] = None
+    roi_raw: Any | None = None
+    if roi_path and roi_path.exists():
+        with roi_path.open() as fh:
+            roi_raw = json.load(fh)
+
     if mode == "roi":
-        roi_map = _load_roi_map(roi_path) if roi_path else {}
-        frame_map = {k: [] for k in roi_map.keys()}
+        frames_list: List[str] = []
+        for ext in ("png", "jpg", "jpeg"):
+            frames_list.extend(
+                sorted(p.name for p in args.frames_dir.glob(f"frame_*.{ext}"))
+            )
+        frame_map = {name: [] for name in frames_list}
     elif mode in {"class", "detect"}:
         frame_map = _load_detections(args.detections_json)
     else:
@@ -1296,12 +1408,23 @@ def main(argv: Iterable[str] | None = None) -> int:
     allowed_names, allowed_ids = _parse_class_filter(args.only_class)
 
     roi_poly: Optional[Polygon] = None
-    if roi_path:
-        roi_map = roi_map or _load_roi_map(roi_path)
-        if roi_map:
-            first = next(iter(roi_map.values()))
-            if first.get("polygon"):
-                roi_poly = Polygon(first.get("polygon"))  # type: ignore[arg-type]
+    if roi_raw:
+        if isinstance(roi_raw, dict):
+            pts = roi_raw.get("polygon") or roi_raw.get("roi")
+            if not pts:
+                for v in roi_raw.values():
+                    if isinstance(v, dict) and v.get("polygon"):
+                        pts = v["polygon"]
+                        break
+            if pts:
+                roi_poly = Polygon(pts)  # type: ignore[arg-type]
+        elif isinstance(roi_raw, list):
+            for item in roi_raw:
+                if isinstance(item, dict):
+                    pts = item.get("polygon") or item.get("roi")
+                    if pts:
+                        roi_poly = Polygon(pts)  # type: ignore[arg-type]
+                        break
 
     primary_map: Dict[int, int] = {}
     if mode == "track" and args.primary_id_stick > 0:
@@ -1339,7 +1462,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.draw_court,
         args.draw_court_lines,
         roi_poly,
-        roi_map,
+        roi_raw,
         args.only_court,
         primary_map,
         args.draw_court_axes,
